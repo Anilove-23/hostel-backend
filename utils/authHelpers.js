@@ -5,8 +5,8 @@ const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY || '15m';
 
-const DEFAULT_REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const GUARD_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const DEFAULT_REFRESH_TOKEN_TTL_MS = Number(process.env.DEFAULT_REFRESH_TOKEN_TTL_MS) || (7 * 24 * 60 * 60 * 1000); // default 7 days
+const GUARD_REFRESH_TOKEN_TTL_MS = Number(process.env.GUARD_REFRESH_TOKEN_TTL_MS) || (30 * 24 * 60 * 60 * 1000); // default 30 days
 
 function getRefreshTokenExpiry(role) {
     const normalizedRole = String(role || '').trim().toLowerCase();
