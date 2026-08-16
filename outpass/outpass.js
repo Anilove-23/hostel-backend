@@ -39,6 +39,30 @@ router.post("/create", auth, async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid outpass type" });
         }
 
+        // Validate dates
+        const depDate = new Date(departure_datetime);
+        const arrDate = new Date(arrival_datetime);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        if (depDate < today) {
+            return res.status(400).json({ success: false, message: "Departure date cannot be in the past" });
+        }
+
+        if (arrDate <= depDate) {
+            return res.status(400).json({ success: false, message: "Arrival date must be after departure date" });
+        }
+
+        // Check if student already has an active outpass
+        const activeCheck = await pool.query(
+            `SELECT id FROM outpass WHERE student_id = $1 AND is_active = true`,
+            [studentId]
+        );
+        
+        if (activeCheck.rows.length > 0) {
+            return res.status(400).json({ success: false, message: "You already have an active outpass and cannot create another one." });
+        }
+
         const query = `
             INSERT INTO outpass (
                 id, student_id, outpass_type, place_of_visit, purpose, 
@@ -107,22 +131,29 @@ router.put("/:id/cancel", auth, async (req, res) => {
             return res.status(401).json({ success: false, message: "Unauthorized" });
         }
 
-        // Check if outpass exists and is pending
-        const checkQuery = `SELECT outp_status as status FROM outpass WHERE id = $1 AND student_id = $2`;
+        // Check if outpass exists and can be cancelled
+        const checkQuery = `SELECT outp_status as status, std_status FROM outpass WHERE id = $1 AND student_id = $2`;
         const checkResult = await pool.query(checkQuery, [outpassId, studentId]);
 
         if (checkResult.rows.length === 0) {
             return res.status(404).json({ success: false, message: "Outpass not found" });
         }
 
-        if (checkResult.rows[0].status !== 'Pending') {
-            return res.status(400).json({ success: false, message: "Only Pending outpasses can be cancelled" });
+        const outpassStatus = checkResult.rows[0].status;
+        const stdStatus = checkResult.rows[0].std_status;
+
+        if (outpassStatus !== 'Pending' && outpassStatus !== 'Approved') {
+            return res.status(400).json({ success: false, message: "Only Pending or Approved outpasses can be cancelled" });
+        }
+
+        if (outpassStatus === 'Approved' && stdStatus === 'Out') {
+            return res.status(400).json({ success: false, message: "Cannot cancel an outpass that is currently in use" });
         }
 
         // Update status to Cancelled
         const updateQuery = `
             UPDATE outpass 
-            SET outp_status = 'Cancelled', updated_at = CURRENT_TIMESTAMP 
+            SET outp_status = 'Cancelled', is_active = false, updated_at = CURRENT_TIMESTAMP 
             WHERE id = $1 AND student_id = $2 
             RETURNING *, outp_status as status;
         `;

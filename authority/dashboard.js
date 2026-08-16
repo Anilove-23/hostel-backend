@@ -22,11 +22,11 @@ router.get("/monitor", auth, async (req, res) => {
         let params = [];
 
         let targetHostel = req.query.hostel;
-        if (!targetHostel && req.user.role === 'warden') {
+        if (req.user.role === 'warden' || req.user.role === 'attendent') {
             targetHostel = req.user.hostel;
         }
 
-        if (targetHostel) {
+        if (targetHostel && targetHostel !== 'All') {
             params.push(targetHostel);
             query += ` AND s.hostel = $1`;
         }
@@ -58,11 +58,11 @@ router.get("/late-returns", auth, async (req, res) => {
         let params = [];
 
         let targetHostel = req.query.hostel;
-        if (!targetHostel && req.user.role === 'warden') {
+        if (req.user.role === 'warden' || req.user.role === 'attendent') {
             targetHostel = req.user.hostel;
         }
 
-        if (targetHostel) {
+        if (targetHostel && targetHostel !== 'All') {
             params.push(targetHostel);
             query += ` AND s.hostel = $1`;
         }
@@ -80,10 +80,17 @@ router.get("/late-returns", auth, async (req, res) => {
 async function addRemark(client, outpassId, user, remarkText) {
     if (!remarkText || !remarkText.trim()) return;
     const remarkId = crypto.randomUUID();
+
+    let adminRole = 'ATTENDANT';
+    const rawRole = (user.status || user.role || '').toUpperCase();
+    if (rawRole.includes('WARDEN')) adminRole = 'CHIEF_WARDEN';
+    else if (rawRole === 'GUARD') adminRole = 'GUARD';
+    else if (rawRole === 'SYSTEM') adminRole = 'SYSTEM';
+
     await client.query(`
-        INSERT INTO outpass_remarks (id, outpass_id, author_id, author_name, author_role, remark)
-        VALUES ($1, $2, $3, $4, $5, $6)
-    `, [remarkId, outpassId, user.id, user.name, user.status || user.role || 'authority', remarkText.trim()]);
+        INSERT INTO outpass_remarks (id, outpass_id, admin_id, admin_role, remark)
+        VALUES ($1, $2, $3, $4, $5)
+    `, [remarkId, outpassId, user.id, adminRole, remarkText.trim()]);
 }
 
 router.patch("/approve/:id", auth, async (req, res) => {
@@ -91,8 +98,18 @@ router.patch("/approve/:id", auth, async (req, res) => {
         const outpassId = req.params.id;
         const { remark } = req.body;
         
+        if (req.user.role === 'warden' || req.user.role === 'attendent') {
+            const check = await pool.query(
+                "SELECT s.hostel FROM outpass o JOIN students s ON o.student_id = s.id WHERE o.id = $1",
+                [outpassId]
+            );
+            if (check.rows.length === 0 || check.rows[0].hostel !== req.user.hostel) {
+                return res.status(403).json({ success: false, message: "Unauthorized to approve for this hostel" });
+            }
+        }
+
         await pool.query(
-            "UPDATE outpass SET outp_status = 'Approved', approved_by = $1, approved_at = NOW() WHERE id = $2",
+            "UPDATE outpass SET outp_status = 'Approved', approved_by = $1, approved_at = NOW(), updated_at = NOW() WHERE id = $2",
             [req.user.id, outpassId]
         );
         
@@ -110,8 +127,18 @@ router.patch("/reject/:id", auth, async (req, res) => {
         const outpassId = req.params.id;
         const { remark } = req.body;
         
+        if (req.user.role === 'warden' || req.user.role === 'attendent') {
+            const check = await pool.query(
+                "SELECT s.hostel FROM outpass o JOIN students s ON o.student_id = s.id WHERE o.id = $1",
+                [outpassId]
+            );
+            if (check.rows.length === 0 || check.rows[0].hostel !== req.user.hostel) {
+                return res.status(403).json({ success: false, message: "Unauthorized to reject for this hostel" });
+            }
+        }
+
         await pool.query(
-            "UPDATE outpass SET outp_status = 'Rejected' WHERE id = $1",
+            "UPDATE outpass SET outp_status = 'Rejected', is_active = false, updated_at = NOW() WHERE id = $1",
             [outpassId]
         );
         
@@ -135,14 +162,24 @@ router.patch("/bulk-action", auth, async (req, res) => {
         try {
             await client.query("BEGIN");
             for (const outpassId of ids) {
+                if (req.user.role === 'warden' || req.user.role === 'attendent') {
+                    const check = await client.query(
+                        "SELECT s.hostel FROM outpass o JOIN students s ON o.student_id = s.id WHERE o.id = $1",
+                        [outpassId]
+                    );
+                    if (check.rows.length === 0 || check.rows[0].hostel !== req.user.hostel) {
+                        throw new Error("Unauthorized hostel access");
+                    }
+                }
+                
                 if (action === "approve") {
                     await client.query(
-                        "UPDATE outpass SET outp_status = 'Approved', approved_by = $1, approved_at = NOW() WHERE id = $2",
+                        "UPDATE outpass SET outp_status = 'Approved', approved_by = $1, approved_at = NOW(), updated_at = NOW() WHERE id = $2",
                         [req.user.id, outpassId]
                     );
                 } else if (action === "reject") {
                     await client.query(
-                        "UPDATE outpass SET outp_status = 'Rejected' WHERE id = $1",
+                        "UPDATE outpass SET outp_status = 'Rejected', is_active = false, updated_at = NOW() WHERE id = $1",
                         [outpassId]
                     );
                 }
@@ -166,7 +203,14 @@ router.get("/:id/remarks", auth, async (req, res) => {
     try {
         const outpassId = req.params.id;
         const result = await pool.query(
-            "SELECT * FROM outpass_remarks WHERE outpass_id = $1 ORDER BY created_at ASC",
+            `SELECT r.id, r.outpass_id, r.remark, r.created_at,
+                    r.admin_id as author_id, 
+                    r.admin_role as author_role,
+                    COALESCE(a.name, 'System') as author_name
+             FROM outpass_remarks r
+             LEFT JOIN authority a ON r.admin_id = a.id
+             WHERE r.outpass_id = $1 
+             ORDER BY r.created_at ASC`,
             [outpassId]
         );
         res.json({ success: true, remarks: result.rows });

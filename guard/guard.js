@@ -19,18 +19,16 @@ router.get("/monitor", async (req, res) => {
                 s.degree_type      AS degree_type
             FROM outpass o 
             JOIN students s ON o.student_id = s.id
-            WHERE o.outp_status = 'Approved'
+            WHERE 1=1
         `;
         
         const params = [];
         
-        // Optional delta sync — only return records updated since last sync
+        // Optional delta sync — return all records updated since last sync, including inactive ones
         if (req.query.updated_since) {
             query += ` AND o.updated_at >= $1`;
             params.push(req.query.updated_since);
-            // Also flag this response as a delta so the client does an upsert
-            // instead of replacing the whole cache
-            query += ` ORDER BY o.created_at DESC`;
+            query += ` ORDER BY o.updated_at ASC`;
             const result = await pool.query(query, params);
             return res.json({
                 success: true,
@@ -40,7 +38,8 @@ router.get("/monitor", async (req, res) => {
             });
         }
 
-        query += ` ORDER BY o.created_at DESC`;
+        // Full initial sync — only return active approved outpasses
+        query += ` AND o.outp_status = 'Approved' AND o.is_active = true ORDER BY o.created_at DESC`;
 
         const result = await pool.query(query, params);
         res.json({ success: true, data: result.rows, server_time: new Date().toISOString() });
@@ -78,10 +77,10 @@ router.post("/sync-logs", async (req, res) => {
                         [timestamp, outpass_id]
                     );
                 } else if (action === 'enter') {
-                    // Student returning — mark as In, record arrival
+                    // Student returning — mark as In, complete outpass, record arrival
                     await pool.query(
                         `UPDATE outpass 
-                         SET std_status = 'In', arrival_datetime = $1, updated_at = NOW() 
+                         SET std_status = 'In', is_active = false, arrival_datetime = $1, updated_at = NOW() 
                          WHERE id = $2`,
                         [timestamp, outpass_id]
                     );

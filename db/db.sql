@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS outpass (
     arrival_datetime TIMESTAMP,
     parent_contact VARCHAR(20) NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
-    outp_status VARCHAR(50) DEFAULT 'Pending' CHECK (outp_status IN ('Pending', 'Approved', 'Rejected')),
+    outp_status VARCHAR(50) DEFAULT 'Pending' CHECK (outp_status IN ('Pending', 'Approved', 'Rejected', 'Cancelled')),
     std_status VARCHAR(50) DEFAULT 'In' CHECK (std_status IN ('In', 'Out')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
