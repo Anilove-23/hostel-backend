@@ -1,0 +1,268 @@
+const express = require('express');
+const router = express.Router();
+const pool = require("../db/db");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const authenticateAdmin = require("../middleware/middleware");
+
+// ==========================================
+// 1. WARDENS MANAGEMENT (Chief Warden Only)
+// ==========================================
+
+// GET all wardens
+router.get("/wardens", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+        
+        const result = await pool.query("SELECT id, name, email, phone, hostel, hostel_id, status, approved_by, created_at FROM authority WHERE status = 'warden' ORDER BY created_at DESC");
+        res.json({ success: true, wardens: result.rows });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// POST allot a warden
+router.post("/wardens", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const { name, email, password, phone, hostel, hostel_id } = req.body;
+        
+        if (!name || !email || !password || !phone || !hostel || !hostel_id) {
+            return res.status(400).json({ success: false, message: "All fields are required" });
+        }
+
+        // Hash the password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        const id = crypto.randomUUID();
+
+        await pool.query(
+            "INSERT INTO authority (id, name, email, password, phone, hostel, hostel_id, status, approved_by) VALUES ($1, $2, $3, $4, $5, $6, $7, 'warden', true)",
+            [id, name, email, hashedPassword, phone, hostel, hostel_id]
+        );
+
+        res.json({ success: true, message: "Warden allotted successfully" });
+    } catch (error) {
+        console.error(error);
+        if (error.code === '23505') { // Unique violation
+            return res.status(400).json({ success: false, message: "Email already exists" });
+        }
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// DELETE revoke a warden
+router.delete("/wardens/:id", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+        
+        await pool.query("DELETE FROM authority WHERE id = $1 AND status = 'warden'", [req.params.id]);
+        res.json({ success: true, message: "Warden removed" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// PATCH toggle warden approval
+router.patch("/wardens/:id/toggle-approval", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+        
+        const { approved_by } = req.body;
+        await pool.query("UPDATE authority SET approved_by = $1 WHERE id = $2 AND status = 'warden'", [approved_by, req.params.id]);
+        res.json({ success: true, message: "Warden approval status updated" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// ==========================================
+// 2. ATTENDANTS MANAGEMENT (Warden Only)
+// ==========================================
+
+// GET all attendants for Warden's hostel
+router.get("/attendants", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "warden" && req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+        
+        let query = "SELECT id, name, email, phone, hostel, hostel_id, status, approved_by, created_at FROM authority WHERE status = 'attendent'";
+        let params = [];
+        
+        if (req.user.role === "warden") {
+            query += " AND hostel = $1";
+            params.push(req.user.hostel);
+        }
+        
+        query += " ORDER BY created_at DESC";
+        
+        const result = await pool.query(query, params);
+        res.json({ success: true, attendants: result.rows });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// POST allot an attendant
+router.post("/attendants", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "warden" && req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const { name, email, password, phone, hostel, hostel_id } = req.body;
+        
+        if (!name || !email || !password || !phone || !hostel || !hostel_id) {
+            return res.status(400).json({ success: false, message: "All fields are required" });
+        }
+
+        if (req.user.role === "warden" && req.user.hostel !== hostel) {
+             return res.status(403).json({ success: false, message: "Cannot assign to a different hostel" });
+        }
+
+        // Hash the password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        const id = crypto.randomUUID();
+
+        await pool.query(
+            "INSERT INTO authority (id, name, email, password, phone, hostel, hostel_id, status, approved_by) VALUES ($1, $2, $3, $4, $5, $6, $7, 'attendent', true)",
+            [id, name, email, hashedPassword, phone, hostel, hostel_id]
+        );
+
+        res.json({ success: true, message: "Attendant allotted successfully" });
+    } catch (error) {
+        console.error(error);
+        if (error.code === '23505') { // Unique violation
+            return res.status(400).json({ success: false, message: "Email already exists" });
+        }
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// DELETE revoke an attendant
+router.delete("/attendants/:id", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "warden" && req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        let query = "DELETE FROM authority WHERE id = $1 AND status = 'attendent'";
+        let params = [req.params.id];
+
+        if (req.user.role === "warden") {
+             query += " AND hostel = $2";
+             params.push(req.user.hostel);
+        }
+
+        const result = await pool.query(query, params);
+        if (result.rowCount === 0) {
+             return res.status(404).json({ success: false, message: "Attendant not found or permission denied" });
+        }
+        res.json({ success: true, message: "Attendant removed" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// ==========================================
+// 3. GUARD DEVICES MANAGEMENT
+// ==========================================
+
+// GET all guard devices
+router.get("/devices", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+        
+        const result = await pool.query("SELECT * FROM guard_devices ORDER BY created_at DESC");
+        res.json({ success: true, devices: result.rows });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// POST add a guard device
+router.post("/devices", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const { phone } = req.body;
+        if (!phone) {
+            return res.status(400).json({ success: false, message: "Phone is required" });
+        }
+
+        const id = crypto.randomUUID();
+
+        await pool.query(
+            "INSERT INTO guard_devices (id, phone, status) VALUES ($1, $2, 'offline')",
+            [id, phone]
+        );
+
+        res.json({ success: true, message: "Guard device added successfully" });
+    } catch (error) {
+        console.error(error);
+        if (error.code === '23505') {
+            return res.status(400).json({ success: false, message: "Phone number already registered" });
+        }
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// DELETE remove a guard device
+router.delete("/devices/:id", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        await pool.query("DELETE FROM guard_devices WHERE id = $1", [req.params.id]);
+        res.json({ success: true, message: "Guard device removed" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// PATCH toggle attendant approval
+router.patch("/attendants/:id/toggle-approval", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "warden" && req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+        
+        const { approved_by } = req.body;
+        // Wardens can only toggle attendants in their own hostel
+        if (req.user.role === "warden") {
+            await pool.query("UPDATE authority SET approved_by = $1 WHERE id = $2 AND status = 'attendent' AND hostel = $3", [approved_by, req.params.id, req.user.hostel]);
+        } else {
+            await pool.query("UPDATE authority SET approved_by = $1 WHERE id = $2 AND status = 'attendent'", [approved_by, req.params.id]);
+        }
+        
+        res.json({ success: true, message: "Attendant approval status updated" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+module.exports = router;
