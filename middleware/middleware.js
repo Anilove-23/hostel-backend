@@ -2,7 +2,10 @@ const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const { findSessionById } = require("../utils/sessionService");
 
-const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET environment variable is not defined.');
+}
 
 module.exports = async function auth(req, res, next) {
     let token = req.cookies?.accessToken || req.cookies?.token;

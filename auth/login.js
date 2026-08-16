@@ -127,9 +127,6 @@ router.post("/verify-login-otp", async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            token: accessToken,
-            accessToken,
-            refreshToken,
             sessionId: session.id,
             user
         });

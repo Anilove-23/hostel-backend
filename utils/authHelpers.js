@@ -2,11 +2,15 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET environment variable is not defined.');
+}
+
 const ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY || '15m';
 
-const DEFAULT_REFRESH_TOKEN_TTL_MS = Number(process.env.DEFAULT_REFRESH_TOKEN_TTL_MS) || (7 * 24 * 60 * 60 * 1000); // default 7 days
-const GUARD_REFRESH_TOKEN_TTL_MS = Number(process.env.GUARD_REFRESH_TOKEN_TTL_MS) || (30 * 24 * 60 * 60 * 1000); // default 30 days
+const DEFAULT_REFRESH_TOKEN_TTL_MS = Number(process.env.DEFAULT_REFRESH_TOKEN_TTL_MS);
+const GUARD_REFRESH_TOKEN_TTL_MS = Number(process.env.GUARD_REFRESH_TOKEN_TTL_MS);
 
 function getRefreshTokenExpiry(role) {
     const normalizedRole = String(role || '').trim().toLowerCase();
@@ -18,13 +22,6 @@ function getRefreshTokenExpiry(role) {
 
 function getClientIp(req) {
     if (!req) return null;
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.trim()) {
-        return forwarded.split(',')[0].trim();
-    }
-    if (Array.isArray(forwarded) && forwarded.length > 0) {
-        return forwarded[0];
-    }
     return req.ip || req.connection?.remoteAddress || null;
 }
 

@@ -23,12 +23,7 @@ router.post("/login", async (req, res) => {
         const user = authCheck.rows[0];
 
         // Verify password
-        let isValidPassword = false;
-        if (user.password.startsWith('$2a$') || user.password.startsWith('$2b$')) {
-            isValidPassword = await bcrypt.compare(password, user.password);
-        } else {
-            isValidPassword = (password === user.password);
-        }
+        const isValidPassword = await bcrypt.compare(password, user.password);
 
         if (!isValidPassword) {
             return res.status(401).json({ success: false, message: "Invalid email or password" });
@@ -83,9 +78,6 @@ router.post("/login", async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            token: accessToken,
-            accessToken,
-            refreshToken,
             sessionId: session.id,
             user
         });
