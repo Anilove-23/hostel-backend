@@ -1,21 +1,35 @@
-const jwt=require("jsonwebtoken");
-const JWT_SECRET=process.env.JWT_SECRET;
+const jwt = require("jsonwebtoken");
+require("dotenv").config();
 
+const JWT_SECRET = process.env.JWT_SECRET || "default_secret";
 
 module.exports = function auth(req, res, next) {
     let token = req.cookies?.token;
-    if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
-        token = req.headers.authorization.split(" ")[1];
+    const authHeader = req.headers.authorization || "";
+
+    if (!token && authHeader.startsWith("Bearer ")) {
+        token = authHeader.slice(7).trim();
+    } else if (!token && req.headers.token) {
+        token = req.headers.token;
     }
-    
-    if(!token){
-        return res.status(401).json({success:false,message:"Unauthorized"});
+
+    if (!token) {
+        return res.status(401).json({
+            statusCode: 401,
+            success: false,
+            message: "Authentication token is required"
+        });
     }
-    jwt.verify(token,JWT_SECRET,(err,user)=>{
-        if(err){
-            return res.status(403).json({success:false,message:"Forbidden"});
-        }
-        req.user=user;
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
         next();
-    });
-}
+    } catch (err) {
+        return res.status(401).json({
+            statusCode: 401,
+            success: false,
+            message: "Invalid or expired token"
+        });
+    }
+};
