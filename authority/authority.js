@@ -273,5 +273,118 @@ router.patch("/attendants/:id/toggle-approval", authenticateAdmin, async (req, r
         res.status(500).json({ success: false, message: "Server Error" });
     }
 });
+router.get("/outpass-cutoff", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "warden") {
+            return res.status(403).json({
+                success: false,
+                message: "Only wardens can access outpass cutoff."
+            });
+        }
 
+        const result = await pool.query(
+            `
+            SELECT
+                h.id,
+                h.name,
+                h.local_outpass_cutoff
+            FROM authority a
+            JOIN hostel h
+                ON h.id = a.hostel_id
+            WHERE a.id = $1
+              AND a.status = 'warden'
+            LIMIT 1
+            `,
+            [req.user.id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Warden or hostel not found."
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                cutoffTime: result.rows[0].local_outpass_cutoff,
+                hostel: result.rows[0].name
+            },
+            message: "Outpass submission deadline fetched successfully."
+        });
+    } catch (error) {
+        console.error("Get outpass cutoff error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Server Error"
+        });
+    }
+});
+
+router.patch("/outpass-cutoff", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "warden") {
+            return res.status(403).json({
+                success: false,
+                message: "Only wardens can update outpass cutoff."
+            });
+        }
+
+        const { cutoffTime } = req.body;
+
+        if (!cutoffTime) {
+            return res.status(400).json({
+                success: false,
+                message: "Cutoff time is required."
+            });
+        }
+
+        const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/;
+
+        if (!timeRegex.test(cutoffTime)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid time format. Expected HH:MM or HH:MM:SS."
+            });
+        }
+
+        const result = await pool.query(
+            `
+            UPDATE hostel h
+            SET local_outpass_cutoff = $1
+            FROM authority a
+            WHERE a.id = $2
+              AND a.status = 'warden'
+              AND h.id = a.hostel_id
+            RETURNING h.id, h.name, h.local_outpass_cutoff
+            `,
+            [cutoffTime, req.user.id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Warden or hostel not found."
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                cutoffTime: result.rows[0].local_outpass_cutoff,
+                hostel: result.rows[0].name
+            },
+            message: "Outpass submission deadline updated successfully."
+        });
+    } catch (error) {
+        console.error("Update outpass cutoff error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Server Error"
+        });
+    }
+});
 module.exports = router;
