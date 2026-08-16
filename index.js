@@ -20,9 +20,10 @@ const pool = require("./db/db");
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-
 app.use(cors({
-    origin: true,
+    origin: function (origin, callback) {
+        callback(null, true);
+    },
     credentials: true
 }));
 app.use(helmet());
@@ -68,6 +69,21 @@ app.get("/api/hostels", async (req, res) => {
     } catch (error) {
         console.error("Hostel list error:", error);
         res.status(500).json({ success: false, hostels: [] });
+    }
+});
+
+// Get rooms for a specific hostel by name
+app.get("/api/hostels/by-name/:name/rooms", async (req, res) => {
+    try {
+        const { name } = req.params;
+        const result = await pool.query(
+            "SELECT room.id, room.room_number, room.capacity FROM room JOIN hostel ON room.hostel_id = hostel.id WHERE hostel.name = $1 ORDER BY room.room_number ASC",
+            [name]
+        );
+        res.json({ success: true, rooms: result.rows });
+    } catch (error) {
+        console.error("Room list error:", error);
+        res.status(500).json({ success: false, rooms: [] });
     }
 });
 

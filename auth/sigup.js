@@ -125,27 +125,17 @@ router.post("/signup", async (req, res) => {
             );
 
             await client.query("COMMIT");
+            return res.status(201).json({ 
+                success: true, 
+                message: "Signup successful. Please login.",
+                user: { id: studentId, email, name, role: "student" }
+            });
         } catch (error) {
             await client.query("ROLLBACK");
             throw error;
         } finally {
             client.release();
         }
-
-        // Generate JWT token
-        const token = jwt.sign(
-            { id: studentId, email, role: "student" },
-            JWT_SECRET,
-            { expiresIn: "7d" }
-        );
-
-        return res.status(201).json({ 
-            success: true, 
-            message: "Signup successful",
-            user: { id: studentId, email, name, role: "student" },
-            token: token
-        });
-
     } catch (err) {
         console.error("Signup error:", err);
         // Handle unique constraint errors (e.g. roll_no already exists)
