@@ -4,6 +4,7 @@ const pool = require("../db/db");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const authenticateAdmin = require("../middleware/middleware");
+const { findOrCreateHostel } = require("../db/hostel");
 
 // ==========================================
 // 1. WARDENS MANAGEMENT (Chief Warden Only)
@@ -41,10 +42,14 @@ router.post("/wardens", authenticateAdmin, async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         const id = crypto.randomUUID();
+        const hostelRecord = await findOrCreateHostel(pool, { name: hostel, id: hostel_id });
+        if (!hostelRecord) {
+            return res.status(400).json({ success: false, message: "A valid hostel is required" });
+        }
 
         await pool.query(
             "INSERT INTO authority (id, name, email, password, phone, hostel, hostel_id, status, approved_by) VALUES ($1, $2, $3, $4, $5, $6, $7, 'warden', true)",
-            [id, name, email, hashedPassword, phone, hostel, hostel_id]
+            [id, name, email, hashedPassword, phone, hostelRecord.name, hostelRecord.id]
         );
 
         res.json({ success: true, message: "Warden allotted successfully" });
@@ -138,10 +143,14 @@ router.post("/attendants", authenticateAdmin, async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         const id = crypto.randomUUID();
+        const hostelRecord = await findOrCreateHostel(pool, { name: hostel, id: hostel_id });
+        if (!hostelRecord) {
+            return res.status(400).json({ success: false, message: "A valid hostel is required" });
+        }
 
         await pool.query(
             "INSERT INTO authority (id, name, email, password, phone, hostel, hostel_id, status, approved_by) VALUES ($1, $2, $3, $4, $5, $6, $7, 'attendent', true)",
-            [id, name, email, hashedPassword, phone, hostel, hostel_id]
+            [id, name, email, hashedPassword, phone, hostelRecord.name, hostelRecord.id]
         );
 
         res.json({ success: true, message: "Attendant allotted successfully" });

@@ -30,7 +30,18 @@ app.use("/api/guard", guard);
 // Mock endpoints to prevent frontend "Invalid server response" crashes
 app.get("/complaint/all", (req, res) => res.json({ data: [] }));
 app.get("/complaint/escalated", (req, res) => res.json({ data: [] }));
-app.get("/api/hostels", (req, res) => res.json([]));
+app.get("/api/hostels", async (req, res) => {
+    try {
+        const pool = require("./db/db");
+        const result = await pool.query(
+            "SELECT id, name, type, total_capacity, local_outpass_cutoff FROM hostel ORDER BY name ASC"
+        );
+        res.json({ success: true, hostels: result.rows });
+    } catch (error) {
+        console.error("Hostel list error:", error);
+        res.status(500).json({ success: false, hostels: [] });
+    }
+});
 
 app.get("/", (req, res) => {
     res.json({ success: true, message: "Backend is clean and running!" });

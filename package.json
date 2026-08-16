@@ -5,7 +5,9 @@
   "license": "ISC",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "db:migrate": "node db/migrate-hostel-schema.js",
+    "test:hostel-changes": "node test-hostel-changes.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

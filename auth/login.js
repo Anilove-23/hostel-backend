@@ -13,7 +13,13 @@ router.post("/login", async (req, res) => {
         const { email, password, role } = req.body;
 
         // Note: Currently only supporting "student" role logic.
-        const userCheck = await pool.query("SELECT * FROM students WHERE email = $1", [email]);
+        const userCheck = await pool.query(
+            `SELECT s.*, r.room_number AS room_number
+             FROM students s
+             LEFT JOIN room r ON r.id = s.physical_room_id
+             WHERE s.email = $1`,
+            [email]
+        );
         if (userCheck.rows.length === 0) {
             return res.status(401).json({ success: false, message: "Invalid email or password" });
         }
@@ -64,7 +70,13 @@ router.post("/verify-login-otp", async (req, res) => {
         }
 
         // Fetch user data for payload
-        const userCheck = await pool.query("SELECT * FROM students WHERE email = $1", [email]);
+        const userCheck = await pool.query(
+            `SELECT s.*, r.room_number AS room_number
+             FROM students s
+             LEFT JOIN room r ON r.id = s.physical_room_id
+             WHERE s.email = $1`,
+            [email]
+        );
         const user = userCheck.rows[0];
 
         // Generate JWT
@@ -76,6 +88,8 @@ router.post("/verify-login-otp", async (req, res) => {
 
         // Remove sensitive fields
         delete user.password;
+        user.physical_room_id = user.room_number || user.physical_room_id;
+        delete user.room_number;
 
         // Cleanup OTPs
         await pool.query("DELETE FROM otp_verification WHERE person_id = $1", [email]);

@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const pool = require("../db/db");
+const { findOrCreateHostel, findOrCreateRoom } = require("../db/hostel");
 const { generateOtp, sendOtpEmail } = require("./otp");
 
 const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret";
@@ -95,13 +96,41 @@ router.post("/signup", async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
         const studentId = crypto.randomUUID();
 
-        // Insert user
-        await pool.query(
-            `INSERT INTO students 
-            (id, name, email, password, phone, hostel, hostel_id, physical_room_id, department, roll_no, degree_type, academic_year) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-            [studentId, name, email, hashedPassword, phone, hostel, hostel, room, department, rollno, degree_type, academic_year]
-        );
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const hostelRecord = await findOrCreateHostel(client, { name: hostel });
+            if (!hostelRecord) {
+                await client.query("ROLLBACK");
+                return res.status(400).json({ success: false, message: "A valid hostel is required" });
+            }
+
+            // Keep the existing signup flow (users enter a room number) while storing
+            // the normalized room UUID required by the new schema.
+            const roomRecord = await findOrCreateRoom(client, {
+                hostelId: hostelRecord.id,
+                roomNumber: room,
+            });
+            if (!roomRecord) {
+                await client.query("ROLLBACK");
+                return res.status(400).json({ success: false, message: "A valid room number is required" });
+            }
+
+            await client.query(
+                `INSERT INTO students
+                (id, name, email, password, phone, hostel, hostel_id, physical_room_id, department, roll_no, degree_type, academic_year)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+                [studentId, name, email, hashedPassword, phone, hostelRecord.name, hostelRecord.id, roomRecord.id, department, rollno, degree_type, academic_year]
+            );
+
+            await client.query("COMMIT");
+        } catch (error) {
+            await client.query("ROLLBACK");
+            throw error;
+        } finally {
+            client.release();
+        }
 
         // Generate JWT token
         const token = jwt.sign(

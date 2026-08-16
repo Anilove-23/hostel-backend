@@ -10,10 +10,11 @@ router.get("/:id/history", auth, async (req, res) => {
         // 1. Get profile
         const profileQuery = `
             SELECT 
-                id, name, email, phone, roll_no, department, 
-                hostel, physical_room_id as room_no 
-            FROM students 
-            WHERE id = $1 OR roll_no = $1
+                s.id, s.name, s.email, s.phone, s.roll_no, s.department,
+                s.hostel, r.room_number as room_no
+            FROM students s
+            LEFT JOIN room r ON r.id = s.physical_room_id
+            WHERE s.id = $1 OR s.roll_no = $1
             LIMIT 1
         `;
         const profileResult = await pool.query(profileQuery, [studentId]);
@@ -78,9 +79,10 @@ router.post("/hostel-status", auth, async (req, res) => {
                 s.department as department,
                 s.phone as phone, 
                 s.hostel as hostel,
-                s.physical_room_id as room_no
+                r.room_number as room_no
             FROM outpass o 
             JOIN students s ON o.student_id = s.id
+            LEFT JOIN room r ON r.id = s.physical_room_id
             WHERE 1=1
         `;
         let params = [];
@@ -118,11 +120,12 @@ router.get("/outpass/:id", auth, async (req, res) => {
                 s.department as department,
                 s.phone as phone, 
                 s.hostel as hostel,
-                s.physical_room_id as room_no,
+                r.room_number as room_no,
                 s.degree_type as degree_type,
                 s.academic_year as academic_year
             FROM outpass o 
             JOIN students s ON o.student_id = s.id
+            LEFT JOIN room r ON r.id = s.physical_room_id
             WHERE o.id = $1
         `;
         const result = await pool.query(query, [req.params.id]);

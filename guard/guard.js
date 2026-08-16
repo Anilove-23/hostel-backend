@@ -14,11 +14,12 @@ router.get("/monitor", async (req, res) => {
                 s.department AS department,
                 s.phone      AS phone, 
                 s.hostel     AS hostel,
-                s.physical_room_id AS room,
+                r.room_number AS room,
                 s.parent_number    AS parent_contact,
                 s.degree_type      AS degree_type
             FROM outpass o 
             JOIN students s ON o.student_id = s.id
+            LEFT JOIN room r ON r.id = s.physical_room_id
             WHERE 1=1
         `;
         
@@ -168,11 +169,26 @@ router.post("/dayscholar", async (req, res) => {
     }
 
     try {
+        const student = await pool.query(
+            "SELECT name, degree_type FROM students WHERE roll_no = $1 LIMIT 1",
+            [roll_no]
+        );
+        if (student.rowCount === 0) {
+            return res.status(400).json({ error: "roll_no must belong to an existing student" });
+        }
+
+        // The student table is authoritative for identity fields now that day_scholar
+        // has a composite foreign key back to it.
+        const canonicalStudent = student.rows[0];
+        if (degree_type && degree_type !== canonicalStudent.degree_type) {
+            return res.status(400).json({ error: "degree_type does not match the student record" });
+        }
+
         const newScholar = await pool.query(`
             INSERT INTO day_scholar (id, name, roll_no, degree_type, phone)
-            VALUES (gen_random_uuid(), $1, $2, $3, $4)
+            VALUES (gen_random_uuid()::text, $1, $2, $3, $4)
             RETURNING *
-        `, [name, roll_no, degree_type, phone]);
+        `, [canonicalStudent.name, roll_no, canonicalStudent.degree_type, phone]);
 
         res.status(201).json(newScholar.rows[0]);
     } catch (err) {

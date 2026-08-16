@@ -14,9 +14,10 @@ router.get("/monitor", auth, async (req, res) => {
                 s.department as department,
                 s.phone as phone, 
                 s.hostel as hostel,
-                s.physical_room_id as room_no
+                r.room_number as room_no
             FROM outpass o 
             JOIN students s ON o.student_id = s.id
+            LEFT JOIN room r ON r.id = s.physical_room_id
             WHERE 1=1
         `;
         let params = [];
