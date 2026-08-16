@@ -1,10 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
 const pool = require("../db/db");
-
-const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret";
+const {
+    getClientIp,
+    getRefreshTokenExpiry,
+    hashRefreshToken,
+    generateRefreshToken,
+    generateAccessToken
+} = require("../utils/authHelpers");
+const { createSession } = require("../utils/sessionService");
 
 router.post("/login", async (req, res) => {
     try {
@@ -17,10 +22,8 @@ router.post("/login", async (req, res) => {
 
         const user = authCheck.rows[0];
 
-        // Verify password (assuming it's stored as plain text for now, but using bcrypt just in case)
+        // Verify password
         let isValidPassword = false;
-        
-        // If password in DB is hashed, use bcrypt. If it's plain text (like some seeded data), check directly.
         if (user.password.startsWith('$2a$') || user.password.startsWith('$2b$')) {
             isValidPassword = await bcrypt.compare(password, user.password);
         } else {
@@ -38,12 +41,34 @@ router.post("/login", async (req, res) => {
             return res.status(403).json({ success: false, message: "Account not approved by admin yet." });
         }
 
-        // Generate JWT
-        const token = jwt.sign(
-            { id: user.id, email: user.email, role: normalizedRole, hostel: user.hostel, status: normalizedRole },
-            JWT_SECRET,
-            { expiresIn: '24h' }
-        );
+        // 1. Prepare session details
+        const refreshToken = generateRefreshToken();
+        const refreshTokenHash = await hashRefreshToken(refreshToken);
+        const refreshExpiresAt = new Date(Date.now() + getRefreshTokenExpiry(normalizedRole));
+        const ipAddress = getClientIp(req);
+        const userAgent = req.headers["user-agent"] || null;
+
+        // 2. Create user_session in DB
+        const session = await createSession({
+            actorId: user.id,
+            actorType: normalizedRole === 'guard' ? 'GUARD' : 'AUTHORITY',
+            ipAddress,
+            userAgent,
+            role: normalizedRole,
+            refreshTokenHash,
+            refreshExpiresAt,
+            machineId: req.body.machineId || null
+        });
+
+        // 3. Generate short-lived Access Token containing sessionId
+        const accessToken = generateAccessToken({
+            id: user.id,
+            email: user.email,
+            role: normalizedRole,
+            hostel: user.hostel,
+            status: normalizedRole,
+            sessionId: session.id
+        });
 
         delete user.password;
         
@@ -51,7 +76,19 @@ router.post("/login", async (req, res) => {
         user.status = normalizedRole;
         user.role = normalizedRole;
 
-        return res.status(200).json({ success: true, token, user });
+        // Optional cookie setting
+        res.cookie("token", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+        res.cookie("accessToken", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+        res.cookie("refreshToken", refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+
+        return res.status(200).json({
+            success: true,
+            token: accessToken,
+            accessToken,
+            refreshToken,
+            sessionId: session.id,
+            user
+        });
     } catch (err) {
         console.error("Authority login error:", err);
         return res.status(500).json({ success: false, message: "Internal server error" });

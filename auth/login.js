@@ -2,11 +2,16 @@ const express = require('express');
 const router = express.Router();
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
 const pool = require("../db/db");
 const { generateOtp, sendOtpEmail } = require("./otp");
-
-const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret";
+const {
+    getClientIp,
+    getRefreshTokenExpiry,
+    hashRefreshToken,
+    generateRefreshToken,
+    generateAccessToken
+} = require("../utils/authHelpers");
+const { createSession } = require("../utils/sessionService");
 
 router.post("/login", async (req, res) => {
     try {
@@ -79,12 +84,33 @@ router.post("/verify-login-otp", async (req, res) => {
         );
         const user = userCheck.rows[0];
 
-        // Generate JWT
-        const token = jwt.sign(
-            { id: user.id, email: user.email, role: "student" },
-            JWT_SECRET,
-            { expiresIn: '24h' }
-        );
+        // 1. Prepare session details
+        const refreshToken = generateRefreshToken();
+        const refreshTokenHash = await hashRefreshToken(refreshToken);
+        const refreshExpiresAt = new Date(Date.now() + getRefreshTokenExpiry("student"));
+        const ipAddress = getClientIp(req);
+        const userAgent = req.headers["user-agent"] || null;
+
+        // 2. Create user_session in DB
+        const session = await createSession({
+            actorId: user.id,
+            actorType: "STUDENT",
+            ipAddress,
+            userAgent,
+            role: "student",
+            refreshTokenHash,
+            refreshExpiresAt,
+            machineId: req.body.machineId || null
+        });
+
+        // 3. Generate short-lived Access Token containing sessionId
+        const accessToken = generateAccessToken({
+            id: user.id,
+            email: user.email,
+            role: "student",
+            hostel: user.hostel,
+            sessionId: session.id
+        });
 
         // Remove sensitive fields
         delete user.password;
@@ -94,7 +120,19 @@ router.post("/verify-login-otp", async (req, res) => {
         // Cleanup OTPs
         await pool.query("DELETE FROM otp_verification WHERE person_id = $1", [email]);
 
-        return res.status(200).json({ success: true, token, user });
+        // Optional cookie setting
+        res.cookie("token", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+        res.cookie("accessToken", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+        res.cookie("refreshToken", refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+
+        return res.status(200).json({
+            success: true,
+            token: accessToken,
+            accessToken,
+            refreshToken,
+            sessionId: session.id,
+            user
+        });
     } catch (err) {
         console.error("OTP verify error:", err);
         return res.status(500).json({ success: false, message: "Internal server error" });

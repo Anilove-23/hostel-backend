@@ -1,10 +1,11 @@
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
+const { findSessionById } = require("../utils/sessionService");
 
-const JWT_SECRET = process.env.JWT_SECRET || "default_secret";
+const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret";
 
-module.exports = function auth(req, res, next) {
-    let token = req.cookies?.token;
+module.exports = async function auth(req, res, next) {
+    let token = req.cookies?.accessToken || req.cookies?.token;
     const authHeader = req.headers.authorization || "";
 
     if (!token && authHeader.startsWith("Bearer ")) {
@@ -23,8 +24,22 @@ module.exports = function auth(req, res, next) {
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
+
+        // If the JWT contains a sessionId, enforce database session validity
+        if (decoded.sessionId) {
+            const session = await findSessionById(decoded.sessionId);
+            if (!session || !session.is_active) {
+                return res.status(401).json({
+                    statusCode: 401,
+                    success: false,
+                    message: "Your session has expired or been revoked. Please log in again."
+                });
+            }
+            req.session = session;
+        }
+
         req.user = decoded;
-        next();
+        return next();
     } catch (err) {
         return res.status(401).json({
             statusCode: 401,
