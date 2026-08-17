@@ -13,9 +13,8 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000,
 });
 
-pool.on("connect", () => {
-  console.log("Connected to the Neon PostgreSQL database");
-});
+// We removed pool.on("connect") because it triggers every time the pool opens a NEW underlying 
+// socket connection (up to max: 20), which causes console spam.
 
 pool.on("error", (err) => {
   console.error("Unexpected error on idle PostgreSQL client:", err.message);
