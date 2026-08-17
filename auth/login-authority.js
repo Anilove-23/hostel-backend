@@ -79,6 +79,8 @@ router.post("/login", async (req, res) => {
         return res.status(200).json({
             success: true,
             sessionId: session.id,
+            token: accessToken,
+            accessToken: accessToken,
             user
         });
     } catch (err) {

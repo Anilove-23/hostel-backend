@@ -73,10 +73,30 @@ CREATE TABLE IF NOT EXISTS authority(
 );
 
 CREATE TABLE IF NOT EXISTS guard_devices(
-    id         TEXT PRIMARY KEY,
-    phone      VARCHAR(255) UNIQUE NOT NULL,
-    status     VARCHAR(255) DEFAULT 'offline',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id               TEXT PRIMARY KEY,
+    device_name      VARCHAR(255) DEFAULT 'Main Gate Terminal',
+    phone            VARCHAR(255) UNIQUE NOT NULL,
+    gate             VARCHAR(100) DEFAULT 'Main Gate',
+    activation_code  VARCHAR(50),
+    fingerprint_hash TEXT,
+    device_info      JSONB,
+    device_token     TEXT,
+    status           VARCHAR(50) DEFAULT 'PENDING_ACTIVATION',
+    approved_by      TEXT REFERENCES authority(id) ON DELETE SET NULL,
+    approved_at      TIMESTAMP,
+    last_active_at   TIMESTAMP,
+    last_ip          VARCHAR(50),
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS guard_device_logs(
+    id          TEXT PRIMARY KEY,
+    device_id   TEXT REFERENCES guard_devices(id) ON DELETE CASCADE,
+    event_type  VARCHAR(50) NOT NULL,
+    ip_address  VARCHAR(50),
+    details     TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS outpass (
