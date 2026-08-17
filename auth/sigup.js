@@ -2,12 +2,17 @@ const express = require('express');
 const router = express.Router();
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
 const pool = require("../db/db");
 const { findOrCreateHostel, findOrCreateRoom } = require("../db/hostel");
 const { generateOtp, sendOtpEmail } = require("./otp");
-
-const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret";
+const {
+    getClientIp,
+    getRefreshTokenExpiry,
+    hashRefreshToken,
+    generateRefreshToken,
+    generateAccessToken
+} = require("../utils/authHelpers");
+const { createSession } = require("../utils/sessionService");
 
 // 1. /send-otp
 router.post("/send-otp", async (req, res) => {
@@ -106,8 +111,6 @@ router.post("/signup", async (req, res) => {
                 return res.status(400).json({ success: false, message: "A valid hostel is required" });
             }
 
-            // Keep the existing signup flow (users enter a room number) while storing
-            // the normalized room UUID required by the new schema.
             const roomRecord = await findOrCreateRoom(client, {
                 hostelId: hostelRecord.id,
                 roomNumber: room,
@@ -125,10 +128,62 @@ router.post("/signup", async (req, res) => {
             );
 
             await client.query("COMMIT");
+            
+            // Generate Session & Tokens for Auto-Login
+            const refreshToken = generateRefreshToken();
+            const refreshTokenHash = await hashRefreshToken(refreshToken);
+            const refreshExpiresAt = new Date(Date.now() + getRefreshTokenExpiry("student"));
+            const ipAddress = getClientIp(req);
+            const userAgent = req.headers["user-agent"] || null;
+
+            const session = await createSession({
+                actorId: studentId,
+                actorType: "STUDENT",
+                ipAddress,
+                userAgent,
+                role: "student",
+                refreshTokenHash,
+                refreshExpiresAt,
+                machineId: req.body.machineId || null
+            });
+
+            const accessToken = generateAccessToken({
+                id: studentId,
+                email: email,
+                role: "student",
+                hostel: hostelRecord.name,
+                sessionId: session.id
+            });
+            
+            // Build the complete user object to return to the frontend
+            const fullUser = {
+                id: studentId,
+                name,
+                email,
+                phone,
+                hostel: hostelRecord.name,
+                physical_room_id: roomRecord.room_number,
+                department,
+                roll_no: rollno,
+                degree_type,
+                academic_year,
+                role: "student",
+                father_name: null,
+                category: null,
+                blood_group: null,
+                state: null
+            };
+
+            // Set secure cookies
+            res.cookie("token", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+            res.cookie("accessToken", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+            res.cookie("refreshToken", refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+
             return res.status(201).json({ 
                 success: true, 
-                message: "Signup successful. Please login.",
-                user: { id: studentId, email, name, role: "student" }
+                message: "Signup successful. Logged in.",
+                sessionId: session.id,
+                user: fullUser
             });
         } catch (error) {
             await client.query("ROLLBACK");

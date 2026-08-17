@@ -77,7 +77,7 @@ app.get("/api/hostels/by-name/:name/rooms", async (req, res) => {
     try {
         const { name } = req.params;
         const result = await pool.query(
-            "SELECT room.id, room.room_number, room.capacity FROM room JOIN hostel ON room.hostel_id = hostel.id WHERE hostel.name = $1 ORDER BY room.room_number ASC",
+            "SELECT room.id, room.room_number, room.max_capacity FROM room JOIN hostel ON room.hostel_id = hostel.id WHERE hostel.name = $1 ORDER BY room.room_number ASC",
             [name]
         );
         res.json({ success: true, rooms: result.rows });
