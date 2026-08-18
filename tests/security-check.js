@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Security & Access Control Verification Suite
  * 
  * Uses Node.js native test runner (node:test / node:assert)
@@ -135,5 +135,35 @@ describe('4. Input Validation & Error Handling', () => {
 
         assert.equal(res.status, 400, 'Server should return 400 when required fields are missing');
         assert.equal(res.body.success, false);
+    });
+});
+
+describe('5. CSRF Origin Verification Defense', () => {
+    it('blocks mutating requests originating from unauthorized third-party domains (403)', async () => {
+        const res = await makeRequest('/api/auth/login', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Origin': 'https://malicious-attacker-website.com'
+            },
+            body: JSON.stringify({ email: 'test@nith.ac.in', password: '123' })
+        });
+
+        assert.equal(res.status, 403, 'Cross-origin requests from unapproved domains must be blocked');
+        assert.equal(res.body.success, false);
+    });
+
+    it('allows mutating requests from legitimate deployed Render domains', async () => {
+        const res = await makeRequest('/api/auth/login', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Origin': 'https://hostel-frontend-1-59yg.onrender.com'
+            },
+            body: JSON.stringify({})
+        });
+
+        // 400 because body was empty, but NOT 403 (origin was accepted)
+        assert.equal(res.status, 400, 'Legitimate Render origins must pass CSRF origin check');
     });
 });

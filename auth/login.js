@@ -10,7 +10,8 @@ const {
     getRefreshTokenExpiry,
     hashRefreshToken,
     generateRefreshToken,
-    generateAccessToken
+    generateAccessToken,
+    getCookieOptions
 } = require("../utils/authHelpers");
 const { createSession } = require("../utils/sessionService");
 
@@ -128,12 +129,8 @@ router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
         // Cleanup OTP record
         await pool.query("DELETE FROM otp_verification WHERE id = $1", [otpRecord.id]);
 
-        // Secure cookies with SameSite=lax for CSRF protection
-        const cookieOpts = {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "lax"
-        };
+        // Set pure HttpOnly cookies (SameSite=none for cross-domain Render deployments)
+        const cookieOpts = getCookieOptions(req);
         res.cookie("token", accessToken, cookieOpts);
         res.cookie("accessToken", accessToken, cookieOpts);
         res.cookie("refreshToken", refreshToken, cookieOpts);

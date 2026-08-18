@@ -77,6 +77,40 @@ app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 app.use(cookieParser());
 
+// CSRF Origin validation for mutating requests
+app.use((req, res, next) => {
+    if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+        return next();
+    }
+
+    const origin = req.headers.origin || req.headers.referer;
+    if (!origin) {
+        return next();
+    }
+
+    const originHostname = (() => {
+        try {
+            return new URL(origin).origin;
+        } catch (_) {
+            return origin;
+        }
+    })();
+
+    const isAllowed = 
+        ALLOWED_ORIGINS.includes(originHostname) ||
+        /^https:\/\/[a-zA-Z0-9-]+\.onrender\.com$/.test(originHostname) ||
+        /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(originHostname);
+
+    if (!isAllowed) {
+        return res.status(403).json({
+            success: false,
+            message: "Cross-Origin Request Blocked by Security Policy"
+        });
+    }
+
+    next();
+});
+
 // Authentication routes
 app.use("/api/auth", signup);
 app.use("/api/auth", login);

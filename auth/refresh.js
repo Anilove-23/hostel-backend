@@ -7,6 +7,7 @@ const {
     compareRefreshTokens,
     generateRefreshToken,
     generateAccessToken,
+    getCookieOptions,
 } = require('../utils/authHelpers');
 const { authLimiter } = require('../middleware/rateLimiter');
 const { findSessionById, updateSessionRefresh } = require('../utils/sessionService');
@@ -86,12 +87,8 @@ router.post('/refresh', authLimiter, async (req, res) => {
         // Generate new Access Token
         const newAccessToken = generateAccessToken(userPayload);
 
-        // Set secure cookies with SameSite=lax for CSRF protection
-        const cookieOpts = {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax'
-        };
+        // Set pure HttpOnly cookies (SameSite=none for cross-domain Render deployments)
+        const cookieOpts = getCookieOptions(req);
         res.cookie('token', newAccessToken, cookieOpts);
         res.cookie('accessToken', newAccessToken, cookieOpts);
         res.cookie('refreshToken', newRefreshToken, cookieOpts);

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const { closeSession, deactivateUserSessions, findSessionById } = require('../utils/sessionService');
-const { JWT_SECRET } = require('../utils/authHelpers');
+const { JWT_SECRET, getCookieOptions } = require('../utils/authHelpers');
 
 router.post('/logout', async (req, res) => {
     try {
@@ -46,10 +46,11 @@ router.post('/logout', async (req, res) => {
             }
         }
 
-        // Clear cookies
-        res.clearCookie('token');
-        res.clearCookie('accessToken');
-        res.clearCookie('refreshToken');
+        // Clear cookies with matching options
+        const cookieOpts = getCookieOptions(req);
+        res.clearCookie('token', cookieOpts);
+        res.clearCookie('accessToken', cookieOpts);
+        res.clearCookie('refreshToken', cookieOpts);
 
         return res.status(200).json({
             success: true,
