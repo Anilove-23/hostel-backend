@@ -207,6 +207,9 @@ router.post("/signup", authLimiter, async (req, res) => {
                 success: true, 
                 message: "Signup successful. Logged in.",
                 sessionId: session.id,
+                token: accessToken,
+                accessToken: accessToken,
+                refreshToken: refreshToken,
                 user: fullUser
             });
         } catch (error) {
