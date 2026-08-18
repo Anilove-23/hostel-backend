@@ -170,12 +170,32 @@ router.post(
             // The new outpass starts with hostel_std_status = 'Out' + auto hostel_visit_log entry
             const autoExitHostel = !isFirstYear && currentHostelStatus === "Out";
 
+function getISTDateParts(d) {
+    if (!d || isNaN(d.getTime())) return { dateStr: "", minutes: 0 };
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+    });
+    const parts = formatter.formatToParts(d);
+    const map = {};
+    for (const p of parts) {
+        map[p.type] = p.value;
+    }
+    const dateStr = `${map.year}-${map.month}-${map.day}`;
+    const minutes = (parseInt(map.hour, 10) || 0) * 60 + (parseInt(map.minute, 10) || 0);
+    return { dateStr, minutes };
+}
+
             // =================================================
-            // VALIDATE DATE / TIME
+            // VALIDATE DATE / TIME (Timezone Aware - Asia/Kolkata)
             // =================================================
             let departure = null;
             let arrival = null;
-            const today = new Date();
 
             if (departure_datetime) {
                 departure = new Date(departure_datetime);
@@ -183,18 +203,8 @@ router.post(
                     throw new ApiError(400, "Invalid departure date.");
                 }
 
-                if (isLocalOutpass) {
-                    if (
-                        today.getDate() !== departure.getDate() ||
-                        today.getMonth() !== departure.getMonth() ||
-                        today.getFullYear() !== departure.getFullYear()
-                    ) {
-                        throw new ApiError(400, "Local outpass departure must be on today's date");
-                    }
-                }
-
-                // Allow 30 minute tolerance for past timestamps
-                if (departure.getTime() < Date.now() - 1000 * 60 * 30) {
+                // Allow 60 minute tolerance for past timestamps and clock skew
+                if (departure.getTime() < Date.now() - 1000 * 60 * 60) {
                     throw new ApiError(400, "Departure time cannot be in the past");
                 }
             }
@@ -205,36 +215,37 @@ router.post(
                     throw new ApiError(400, "Invalid arrival date.");
                 }
 
-                if (isLocalOutpass) {
-                    if (
-                        today.getDate() !== arrival.getDate() ||
-                        today.getMonth() !== arrival.getMonth() ||
-                        today.getFullYear() !== arrival.getFullYear()
-                    ) {
-                        throw new ApiError(400, "Local outpass arrival must be on today's date");
-                    }
-                }
-
                 if (departure && arrival <= departure) {
                     throw new ApiError(400, "Arrival time must be after departure time");
                 }
             }
 
-            // =================================================
-            // LOCAL OUTPASS CUTOFF VALIDATION
-            // =================================================
-            if (isLocalOutpass && departure && student.local_outpass_cutoff) {
-                const departureMinutes = departure.getHours() * 60 + departure.getMinutes();
-                const [cutoffHour, cutoffMinute] = String(student.local_outpass_cutoff)
-                    .split(":")
-                    .map(Number);
-                const cutoffMinutes = cutoffHour * 60 + (cutoffMinute || 0);
+            if (isLocalOutpass) {
+                if (!departure || !arrival) {
+                    throw new ApiError(400, "Departure and arrival times are required for Local outpass.");
+                }
 
-                if (departureMinutes > cutoffMinutes && !is_emergency) {
-                    throw new ApiError(
-                        400,
-                        `Local outpass departure cannot be after the hostel cutoff time (${student.local_outpass_cutoff}).`
-                    );
+                const departureIST = getISTDateParts(departure);
+                const arrivalIST = getISTDateParts(arrival);
+
+                // Both departure and arrival must be on the same calendar day
+                if (departureIST.dateStr !== arrivalIST.dateStr) {
+                    throw new ApiError(400, "Local outpass departure and arrival must be on the same day.");
+                }
+
+                // LOCAL OUTPASS CUTOFF VALIDATION
+                if (student.local_outpass_cutoff) {
+                    const [cutoffHour, cutoffMinute] = String(student.local_outpass_cutoff)
+                        .split(":")
+                        .map(Number);
+                    const cutoffMinutes = cutoffHour * 60 + (cutoffMinute || 0);
+
+                    if (departureIST.minutes > cutoffMinutes && !is_emergency) {
+                        throw new ApiError(
+                            400,
+                            `Local outpass departure cannot be after the hostel cutoff time (${student.local_outpass_cutoff}).`
+                        );
+                    }
                 }
             }
 
