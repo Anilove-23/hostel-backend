@@ -77,9 +77,15 @@ app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 app.use(cookieParser());
 
-// CSRF Origin validation for mutating requests
+// CSRF Origin validation for mutating requests (applies when relying on ambient cookies)
 app.use((req, res, next) => {
     if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+        return next();
+    }
+
+    // Explicit Authorization header with Bearer token is immune to CSRF
+    const authHeader = req.headers.authorization || "";
+    if (authHeader.startsWith("Bearer ")) {
         return next();
     }
 
