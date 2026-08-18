@@ -167,3 +167,21 @@ describe('5. CSRF Origin Verification Defense', () => {
         assert.equal(res.status, 400, 'Legitimate Render origins must pass CSRF origin check');
     });
 });
+
+describe('6. Sensitive Data Exposure & Header Hardening', () => {
+    it('ensures security headers (Helmet / CSP) are set on responses', async () => {
+        const res = await makeRequest('/');
+        assert.ok(res.headers.get('x-content-type-options'), 'X-Content-Type-Options header must be set');
+        assert.ok(res.headers.get('x-frame-options'), 'X-Frame-Options (Clickjacking defense) must be set');
+    });
+
+    it('ensures API error responses do not leak internal database stack traces', async () => {
+        const res = await makeRequest('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'nonexistent@nith.ac.in', password: 'invalid' })
+        });
+
+        assert.equal(res.body.stack, undefined, 'Stack traces must not be exposed in production API responses');
+    });
+});
