@@ -193,12 +193,11 @@ router.post("/signup", authLimiter, async (req, res) => {
                 state: null
             };
 
-            // Set secure cookies with SameSite (none for cross-site Render deployments)
-            const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
+            // Set secure cookies with SameSite=lax for CSRF protection
             const cookieOpts = {
                 httpOnly: true,
-                secure: isProduction,
-                sameSite: isProduction ? "none" : "lax"
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "lax"
             };
             res.cookie("token", accessToken, cookieOpts);
             res.cookie("accessToken", accessToken, cookieOpts);

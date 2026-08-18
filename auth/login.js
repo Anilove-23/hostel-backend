@@ -125,12 +125,11 @@ router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
         // Cleanup OTP record
         await pool.query("DELETE FROM otp_verification WHERE id = $1", [otpRecord.id]);
 
-        // Secure cookies with SameSite (none for cross-site Render deployments)
-        const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
+        // Secure cookies with SameSite=lax for CSRF protection
         const cookieOpts = {
             httpOnly: true,
-            secure: isProduction,
-            sameSite: isProduction ? "none" : "lax"
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax"
         };
         res.cookie("token", accessToken, cookieOpts);
         res.cookie("accessToken", accessToken, cookieOpts);

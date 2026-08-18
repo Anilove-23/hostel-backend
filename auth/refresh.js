@@ -86,12 +86,11 @@ router.post('/refresh', authLimiter, async (req, res) => {
         // Generate new Access Token
         const newAccessToken = generateAccessToken(userPayload);
 
-        // Set secure cookies with SameSite (none for cross-site Render deployments)
-        const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
+        // Set secure cookies with SameSite=lax for CSRF protection
         const cookieOpts = {
             httpOnly: true,
-            secure: isProduction,
-            sameSite: isProduction ? 'none' : 'lax'
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
         };
         res.cookie('token', newAccessToken, cookieOpts);
         res.cookie('accessToken', newAccessToken, cookieOpts);
