@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const crypto = require("crypto");
 const pool = require("../db/db");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/apiError");
@@ -207,6 +208,182 @@ router.post(
                         "Entry recorded successfully"
                     )
                 );
+            }
+        } catch (error) {
+            await client.query("ROLLBACK");
+            throw error;
+        } finally {
+            client.release();
+        }
+    })
+);
+
+/*
+=================================================
+AUTOMATIC BARCODE / QR SCAN ENTRY & EXIT
+POST /api/guard/scan
+=================================================
+*/
+router.post(
+    "/scan",
+    asyncHandler(async (req, res) => {
+        let { outpass_id, gate, remark, action } = req.body;
+        const guardId = req.user?.id || null;
+
+        if (!outpass_id) {
+            throw new ApiError(400, "outpass_id (UUID) is required");
+        }
+
+        // Clean outpass_id in case scanner includes whitespace/newlines
+        outpass_id = String(outpass_id).trim();
+
+        const client = await pool.connect();
+
+        try {
+            await client.query("BEGIN");
+
+            const outpassRes = await client.query(
+                `SELECT 
+                    o.*, 
+                    s.name AS student_name, 
+                    s.roll_no, 
+                    s.phone, 
+                    s.hostel, 
+                    s.department,
+                    r.room_number AS room
+                 FROM outpass o
+                 JOIN students s ON o.student_id = s.id
+                 LEFT JOIN room r ON r.id = s.physical_room_id
+                 WHERE o.id = $1
+                 FOR UPDATE;`,
+                [outpass_id]
+            );
+
+            if (outpassRes.rows.length === 0) {
+                throw new ApiError(404, "Invalid Outpass: No record found with this ID / Barcode");
+            }
+
+            const outpass = outpassRes.rows[0];
+
+            if (outpass.outp_status !== "Approved") {
+                throw new ApiError(400, `Outpass cannot be scanned. Current approval status: ${outpass.outp_status}`);
+            }
+
+            // Determine target action: if not explicitly specified ('exit' | 'enter'), toggle automatically
+            let targetAction = action;
+            if (!targetAction || targetAction === "auto") {
+                targetAction = (outpass.std_status === "Out") ? "enter" : "exit";
+            }
+
+            if (targetAction === "exit") {
+                if (outpass.std_status === "Out") {
+                    throw new ApiError(400, `Student ${outpass.student_name} (${outpass.roll_no}) is already recorded as OUTSIDE campus`);
+                }
+
+                await client.query(
+                    `INSERT INTO visit_log (outpass_id, student_id, gate, exit_guard_id, actual_departure)
+                     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP);`,
+                    [outpass.id, outpass.student_id, gate || "Main Gate", guardId]
+                );
+
+                await client.query(
+                    `UPDATE outpass
+                     SET std_status = 'Out', updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $1;`,
+                    [outpass.id]
+                );
+
+                const actionLogId = crypto.randomUUID();
+                await client.query(
+                    `INSERT INTO guard_action_log (id, outpass_id, action, gate, remark, guard_id, actioned_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+                     ON CONFLICT (id) DO NOTHING;`,
+                    [actionLogId, outpass.id, "exit", gate || "Main Gate", remark || "Scanned at gate (EXIT)", guardId]
+                );
+
+                await client.query("COMMIT");
+
+                return res.status(200).json(
+                    new ApiResponse(
+                        200,
+                        {
+                            action: "EXIT",
+                            outpass_id: outpass.id,
+                            student_name: outpass.student_name,
+                            roll_no: outpass.roll_no,
+                            hostel: outpass.hostel,
+                            room: outpass.room,
+                            department: outpass.department,
+                            phone: outpass.phone,
+                            outpass_type: outpass.outpass_type,
+                            place_of_visit: outpass.place_of_visit,
+                            purpose: outpass.purpose,
+                            status: "Out",
+                            departure_time: new Date().toISOString()
+                        },
+                        `EXIT recorded for ${outpass.student_name} (${outpass.roll_no})`
+                    )
+                );
+            } else if (targetAction === "enter") {
+                if (outpass.std_status !== "Out") {
+                    throw new ApiError(400, `Student ${outpass.student_name} (${outpass.roll_no}) is already recorded as INSIDE campus`);
+                }
+
+                await client.query(
+                    `UPDATE visit_log
+                     SET actual_arrival = CURRENT_TIMESTAMP,
+                         entry_guard_id = $1,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = (
+                         SELECT id
+                         FROM visit_log
+                         WHERE outpass_id = $2
+                         ORDER BY created_at DESC
+                         LIMIT 1
+                     );`,
+                    [guardId, outpass.id]
+                );
+
+                await client.query(
+                    `UPDATE outpass
+                     SET std_status = 'In', is_active = false, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $1;`,
+                    [outpass.id]
+                );
+
+                const actionLogId = crypto.randomUUID();
+                await client.query(
+                    `INSERT INTO guard_action_log (id, outpass_id, action, gate, remark, guard_id, actioned_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+                     ON CONFLICT (id) DO NOTHING;`,
+                    [actionLogId, outpass.id, "enter", gate || "Main Gate", remark || "Scanned at gate (RETURN)", guardId]
+                );
+
+                await client.query("COMMIT");
+
+                return res.status(200).json(
+                    new ApiResponse(
+                        200,
+                        {
+                            action: "RETURN",
+                            outpass_id: outpass.id,
+                            student_name: outpass.student_name,
+                            roll_no: outpass.roll_no,
+                            hostel: outpass.hostel,
+                            room: outpass.room,
+                            department: outpass.department,
+                            phone: outpass.phone,
+                            outpass_type: outpass.outpass_type,
+                            place_of_visit: outpass.place_of_visit,
+                            purpose: outpass.purpose,
+                            status: "In",
+                            arrival_time: new Date().toISOString()
+                        },
+                        `RETURN recorded for ${outpass.student_name} (${outpass.roll_no})`
+                    )
+                );
+            } else {
+                throw new ApiError(400, "Invalid action: must be 'exit', 'enter', or 'auto'");
             }
         } catch (error) {
             await client.query("ROLLBACK");
