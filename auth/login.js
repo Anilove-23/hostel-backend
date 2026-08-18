@@ -17,6 +17,9 @@ const { createSession } = require("../utils/sessionService");
 router.post("/login", authLimiter, async (req, res) => {
     try {
         const { email, password, role } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: "Email and password are required" });
+        }
         const normalizedEmail = String(email || "").trim().toLowerCase();
 
         // Note: Currently only supporting "student" role logic.
