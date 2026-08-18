@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const { closeSession, deactivateUserSessions } = require('../utils/sessionService');
+const { closeSession, deactivateUserSessions, findSessionById } = require('../utils/sessionService');
 const { JWT_SECRET } = require('../utils/authHelpers');
 
 router.post('/logout', async (req, res) => {
@@ -28,15 +28,22 @@ router.post('/logout', async (req, res) => {
                 actorId = decoded.id;
                 actorType = decoded.role;
             } catch (ignore) {
-                // If token is expired, we still proceed with logout using sessionId from body
+                // If token is invalid or expired
             }
         }
 
-        // Option to logout of all devices
+        // Option to logout of all devices (requires authenticated token)
         if (req.body?.allDevices && actorId) {
             await deactivateUserSessions(actorId, actorType);
         } else if (sessionId) {
-            await closeSession(sessionId);
+            // Verify session ownership if actorId is known, or ensure session exists
+            const existingSession = await findSessionById(sessionId);
+            if (existingSession) {
+                // Only allow session closure if the authenticated actor owns this session or token matches
+                if (!actorId || String(existingSession.actor_id) === String(actorId)) {
+                    await closeSession(sessionId);
+                }
+            }
         }
 
         // Clear cookies

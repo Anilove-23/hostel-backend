@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const pool = require("../db/db");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
@@ -45,8 +46,17 @@ const verifyGuardDevice = asyncHandler(async (req, res, next) => {
         throw new ApiError(403, "Device is not yet activated. Please complete activation using your pairing code.");
     }
 
-    // Verify token
-    if (!deviceToken || deviceToken !== device.device_token) {
+    // Verify token using constant-time comparison
+    let tokenMatches = false;
+    if (deviceToken && device.device_token) {
+        const bufA = Buffer.from(String(deviceToken));
+        const bufB = Buffer.from(String(device.device_token));
+        if (bufA.length === bufB.length) {
+            tokenMatches = crypto.timingSafeEqual(bufA, bufB);
+        }
+    }
+
+    if (!tokenMatches) {
         throw new ApiError(401, "Invalid device session. Please re-activate this terminal.");
     }
 

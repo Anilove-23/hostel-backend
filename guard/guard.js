@@ -147,7 +147,7 @@ router.post(
 
                 await client.query(
                     `UPDATE outpass
-                     SET std_status = 'Out', updated_at = CURRENT_TIMESTAMP
+                     SET std_status = 'Out', hostel_std_status = 'Out', updated_at = CURRENT_TIMESTAMP
                      WHERE id = $1;`,
                     [outpass.id]
                 );
@@ -232,6 +232,10 @@ router.post(
             throw new ApiError(400, "logs array is required");
         }
 
+        if (logs.length > 500) {
+            throw new ApiError(400, "Maximum 500 logs allowed per sync request");
+        }
+
         // Sort chronologically by timestamp so exits process before entries
         const sortedLogs = [...logs].sort((a, b) => {
             const timeA = new Date(a.timestamp || a.actioned_at || 0).getTime();
@@ -294,12 +298,12 @@ router.post(
                                 [outpass_id, outpass.student_id, gate || "Main Gate", guardId, actionedAt]
                             );
 
-                            await client.query(
-                                `UPDATE outpass
-                                 SET std_status = 'Out', updated_at = CURRENT_TIMESTAMP
-                                 WHERE id = $1;`,
-                                [outpass_id]
-                            );
+                                await client.query(
+                                    `UPDATE outpass
+                                     SET std_status = 'Out', hostel_std_status = 'Out', updated_at = CURRENT_TIMESTAMP
+                                     WHERE id = $1;`,
+                                    [outpass_id]
+                                );
                         } else if (outpass.std_status === "Out") {
                             // Already outside
                         } else {

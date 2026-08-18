@@ -5,6 +5,7 @@ const bcrypt = require("bcryptjs");
 const pool = require("../db/db");
 const { findOrCreateHostel, findOrCreateRoom } = require("../db/hostel");
 const { generateOtp, sendOtpEmail } = require("./otp");
+const { otpLimiter, otpVerifyLimiter, authLimiter } = require("../middleware/rateLimiter");
 const {
     getClientIp,
     getRefreshTokenExpiry,
@@ -14,33 +15,41 @@ const {
 } = require("../utils/authHelpers");
 const { createSession } = require("../utils/sessionService");
 
+const COLLEGE_EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@nith\.ac\.in$/;
+
+function hashOtp(otp) {
+    return crypto.createHash("sha256").update(String(otp).trim()).digest("hex");
+}
+
 // 1. /send-otp
-router.post("/send-otp", async (req, res) => {
+router.post("/send-otp", otpLimiter, async (req, res) => {
     try {
         const { email } = req.body;
+        const normalizedEmail = String(email || "").trim().toLowerCase();
         
-        // Validation
-        if (!email || !email.endsWith("@nith.ac.in")) {
-            return res.status(400).json({ success: false, message: "Invalid college email" });
+        // Strict email domain validation
+        if (!normalizedEmail || !COLLEGE_EMAIL_REGEX.test(normalizedEmail)) {
+            return res.status(400).json({ success: false, message: "Invalid college email. Must be a valid @nith.ac.in address." });
         }
 
         // Check if user already exists
-        const userCheck = await pool.query("SELECT id FROM students WHERE email = $1", [email]);
+        const userCheck = await pool.query("SELECT id FROM students WHERE email = $1", [normalizedEmail]);
         if (userCheck.rows.length > 0) {
             return res.status(409).json({ success: false, message: "Account already exists. Please login." });
         }
 
         // Generate and send OTP
         const otp = generateOtp();
-        await sendOtpEmail(email, otp);
+        await sendOtpEmail(normalizedEmail, otp);
 
-        // Store OTP in database
+        // Store hashed OTP in database
         const expiresAt = new Date(Date.now() + 5 * 60000); // 5 mins from now
         const otpId = crypto.randomUUID();
+        const hashedOtp = hashOtp(otp);
         
         await pool.query(
             "INSERT INTO otp_verification (id, person_id, otp, expires_at) VALUES ($1, $2, $3, $4)",
-            [otpId, email, otp, expiresAt]
+            [otpId, normalizedEmail, hashedOtp, expiresAt]
         );
 
         return res.status(200).json({ success: true, message: "OTP sent successfully" });
@@ -51,13 +60,15 @@ router.post("/send-otp", async (req, res) => {
 });
 
 // 2. /verify-signup-otp
-router.post("/verify-signup-otp", async (req, res) => {
+router.post("/verify-signup-otp", otpVerifyLimiter, async (req, res) => {
     try {
         const { email, otp } = req.body;
+        const normalizedEmail = String(email || "").trim().toLowerCase();
+        const hashedOtp = hashOtp(otp);
 
         const otpCheck = await pool.query(
             "SELECT id, expires_at FROM otp_verification WHERE person_id = $1 AND otp = $2 ORDER BY created_at DESC LIMIT 1",
-            [email, otp]
+            [normalizedEmail, hashedOtp]
         );
 
         if (otpCheck.rows.length === 0) {
@@ -83,18 +94,23 @@ router.post("/verify-signup-otp", async (req, res) => {
 });
 
 // 3. /signup
-router.post("/signup", async (req, res) => {
+router.post("/signup", authLimiter, async (req, res) => {
     try {
         const { name, email, password, phone, hostel, room, department, rollno, degree_type, academic_year } = req.body;
+        const normalizedEmail = String(email || "").trim().toLowerCase();
 
-        // Verify that email was verified
+        if (!normalizedEmail || !COLLEGE_EMAIL_REGEX.test(normalizedEmail)) {
+            return res.status(400).json({ success: false, message: "Invalid college email. Must be a valid @nith.ac.in address." });
+        }
+
+        // Verify that email was recently verified (within last 15 mins)
         const verifyCheck = await pool.query(
-            "SELECT is_verified FROM otp_verification WHERE person_id = $1 ORDER BY created_at DESC LIMIT 1",
-            [email]
+            "SELECT id, is_verified, created_at FROM otp_verification WHERE person_id = $1 AND is_verified = true AND created_at >= NOW() - INTERVAL '15 minutes' ORDER BY created_at DESC LIMIT 1",
+            [normalizedEmail]
         );
 
         if (verifyCheck.rows.length === 0 || !verifyCheck.rows[0].is_verified) {
-            return res.status(403).json({ success: false, message: "Email not verified via OTP" });
+            return res.status(403).json({ success: false, message: "Email not verified or verification session expired" });
         }
 
         // Hash password
@@ -124,8 +140,11 @@ router.post("/signup", async (req, res) => {
                 `INSERT INTO students
                 (id, name, email, password, phone, hostel, hostel_id, physical_room_id, department, roll_no, degree_type, academic_year)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-                [studentId, name, email, hashedPassword, phone, hostelRecord.name, hostelRecord.id, roomRecord.id, department, rollno, degree_type, academic_year]
+                [studentId, name, normalizedEmail, hashedPassword, phone, hostelRecord.name, hostelRecord.id, roomRecord.id, department, rollno, degree_type, academic_year]
             );
+
+            // Clean up and consume verified OTPs
+            await client.query("DELETE FROM otp_verification WHERE person_id = $1", [normalizedEmail]);
 
             await client.query("COMMIT");
             
@@ -174,10 +193,15 @@ router.post("/signup", async (req, res) => {
                 state: null
             };
 
-            // Set secure cookies
-            res.cookie("token", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
-            res.cookie("accessToken", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
-            res.cookie("refreshToken", refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+            // Set secure cookies with SameSite
+            const cookieOpts = {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "lax"
+            };
+            res.cookie("token", accessToken, cookieOpts);
+            res.cookie("accessToken", accessToken, cookieOpts);
+            res.cookie("refreshToken", refreshToken, cookieOpts);
 
             return res.status(201).json({ 
                 success: true, 

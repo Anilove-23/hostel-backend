@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const pool = require("../db/db");
+const { authLimiter } = require("../middleware/rateLimiter");
 const {
     getClientIp,
     getRefreshTokenExpiry,
@@ -11,7 +12,7 @@ const {
 } = require("../utils/authHelpers");
 const { createSession } = require("../utils/sessionService");
 
-router.post("/login", async (req, res) => {
+router.post("/login", authLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
 
@@ -71,10 +72,15 @@ router.post("/login", async (req, res) => {
         user.status = normalizedRole;
         user.role = normalizedRole;
 
-        // Optional cookie setting
-        res.cookie("token", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
-        res.cookie("accessToken", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
-        res.cookie("refreshToken", refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+        // Secure cookies with SameSite
+        const cookieOpts = {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax"
+        };
+        res.cookie("token", accessToken, cookieOpts);
+        res.cookie("accessToken", accessToken, cookieOpts);
+        res.cookie("refreshToken", refreshToken, cookieOpts);
 
         return res.status(200).json({
             success: true,

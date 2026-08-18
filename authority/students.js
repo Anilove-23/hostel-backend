@@ -85,6 +85,23 @@ router.get(
         const profile = profileResult.rows[0];
         const canonicalId = profile.id;
 
+        // RBAC & Ownership Security Verification
+        const userRole = (req.user?.role || req.user?.status || "").toLowerCase().replace(/[_-]/g, "");
+        if (userRole === "student") {
+            if (req.user.id !== profile.id && req.user.roll_no !== profile.roll_no && req.user.email !== profile.email) {
+                throw new ApiError(403, "Access denied: You are only authorized to view your own profile and history");
+            }
+        } else if (userRole === "warden" || userRole === "attendant" || userRole === "attendent") {
+            const hostelInfo = await resolveHostel(pool, req.user);
+            if (hostelInfo && hostelInfo.hostel && profile.hostel !== hostelInfo.hostel) {
+                throw new ApiError(403, `Access denied: Student is assigned to ${profile.hostel}, outside your assigned hostel (${hostelInfo.hostel})`);
+            }
+        } else if (userRole === "chiefwarden" || userRole === "guard") {
+            // Full institutional access granted
+        } else {
+            throw new ApiError(403, "Access denied: Unauthorized role");
+        }
+
         // 2. Fetch Outpasses
         const outpassQuery = `
             SELECT o.*, o.outp_status AS status
@@ -131,20 +148,27 @@ GET /api/students/search?q=
 router.get(
     "/search",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const q = (req.query.q || "").trim();
         if (!q || q.length < 2) {
             throw new ApiError(400, "Search query must be at least 2 characters");
         }
 
-        const result = await pool.query(
-            `SELECT id, name, roll_no, department, hostel
-             FROM students
-             WHERE name ILIKE $1 OR roll_no ILIKE $1
-             ORDER BY name ASC
-             LIMIT 20`,
-            [`%${q}%`]
-        );
+        const hostelInfo = await resolveHostel(pool, req.user).catch(() => null);
+        let query = `SELECT id, name, roll_no, department, hostel
+                     FROM students
+                     WHERE (name ILIKE $1 OR roll_no ILIKE $1)`;
+        const params = [`%${q}%`];
+
+        if (hostelInfo && hostelInfo.hostel) {
+            params.push(hostelInfo.hostel);
+            query += ` AND hostel = $2`;
+        }
+
+        query += ` ORDER BY name ASC LIMIT 20`;
+
+        const result = await pool.query(query, params);
 
         return res.status(200).json(
             new ApiResponse(200, { students: result.rows }, "Students search results")
@@ -161,6 +185,7 @@ POST /api/students/search
 router.post(
     "/search",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const { name, roll_no } = req.body;
         const page = parseInt(req.query.page, 10) || 1;
@@ -170,6 +195,8 @@ router.post(
         if (!name && !roll_no) {
             throw new ApiError(400, "Provide either name or roll number");
         }
+
+        const hostelInfo = await resolveHostel(pool, req.user).catch(() => null);
 
         const conditions = [];
         const values = [];
@@ -184,7 +211,12 @@ router.post(
             conditions.push(`s.name ILIKE '%' || $${values.length} || '%'`);
         }
 
-        const whereClause = conditions.join(" OR ");
+        let whereClause = `(${conditions.join(" OR ")})`;
+
+        if (hostelInfo && hostelInfo.hostel) {
+            values.push(hostelInfo.hostel);
+            whereClause += ` AND s.hostel = $${values.length}`;
+        }
 
         const dataQuery = `
             SELECT
@@ -298,6 +330,7 @@ POST /api/students/range
 router.post(
     "/range",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const { departure_datetime, arrival_datetime } = req.body;
 
@@ -398,6 +431,7 @@ POST /api/students/hostel-status
 router.post(
     "/hostel-status",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const { outp_status } = req.body;
         const page = parseInt(req.query.page, 10) || 1;
@@ -500,6 +534,7 @@ POST /api/students/status
 router.post(
     "/status",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const { outp_status } = req.body;
         const page = parseInt(req.query.page, 10) || 1;
@@ -509,6 +544,20 @@ router.post(
         if (!outp_status) {
             throw new ApiError(400, "Outpass status is required");
         }
+
+        const hostelInfo = await resolveHostel(pool, req.user);
+        let whereConditions = ["o.outp_status = $1"];
+        let params = [outp_status];
+
+        if (hostelInfo) {
+            params.push(hostelInfo.hostel);
+            whereConditions.push(`s.hostel = $${params.length}`);
+        } else if (req.body.hostel && req.body.hostel !== "All") {
+            params.push(req.body.hostel);
+            whereConditions.push(`s.hostel = $${params.length}`);
+        }
+
+        const whereSql = `WHERE ${whereConditions.join(" AND ")}`;
 
         const dataQuery = `
             SELECT
@@ -534,20 +583,23 @@ router.post(
             FROM outpass o
             JOIN students s ON o.student_id = s.id
             LEFT JOIN room r ON s.physical_room_id = r.id
-            WHERE o.outp_status = $1
+            ${whereSql}
             ORDER BY o.created_at DESC
-            LIMIT $2 OFFSET $3;
+            LIMIT $${params.length + 1} OFFSET $${params.length + 2};
         `;
 
         const countQuery = `
             SELECT COUNT(*) AS total
             FROM outpass o
-            WHERE o.outp_status = $1;
+            JOIN students s ON o.student_id = s.id
+            ${whereSql};
         `;
 
+        const dataValues = [...params, limit, offset];
+
         const [result, countResult] = await Promise.all([
-            pool.query(dataQuery, [outp_status, limit, offset]),
-            pool.query(countQuery, [outp_status])
+            pool.query(dataQuery, dataValues),
+            pool.query(countQuery, params)
         ]);
 
         const total = parseInt(countResult.rows[0].total, 10);
@@ -581,6 +633,7 @@ GET /api/students/outpass/:id
 router.get(
     "/outpass/:id",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const { id } = req.params;
 
@@ -608,6 +661,17 @@ router.get(
             throw new ApiError(404, "Outpass not found");
         }
 
+        const outpassRecord = outpassResult.rows[0];
+
+        // Scope check for warden/attendant
+        const userRole = (req.user?.role || req.user?.status || "").toLowerCase().replace(/[_-]/g, "");
+        if (userRole === "warden" || userRole === "attendant" || userRole === "attendent") {
+            const hostelInfo = await resolveHostel(pool, req.user);
+            if (hostelInfo && hostelInfo.hostel && outpassRecord.hostel !== hostelInfo.hostel) {
+                throw new ApiError(403, `Access denied: Outpass belongs to ${outpassRecord.hostel}, outside your assigned hostel (${hostelInfo.hostel})`);
+            }
+        }
+
         const remarksQuery = `
             SELECT
                 r.id,
@@ -628,8 +692,8 @@ router.get(
             new ApiResponse(
                 200,
                 {
-                    ...outpassResult.rows[0],
-                    outpass: outpassResult.rows[0],
+                    ...outpassRecord,
+                    outpass: outpassRecord,
                     remarks: remarksResult.rows
                 },
                 "Outpass details fetched successfully"

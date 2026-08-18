@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS outpass_remarks (
 CREATE TABLE IF NOT EXISTS otp_verification(
     id          TEXT PRIMARY KEY,
     person_id   TEXT NOT NULL,
-    otp         VARCHAR(6) NOT NULL,
+    otp         VARCHAR(255) NOT NULL,
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at  TIMESTAMP NOT NULL,
     is_verified BOOLEAN DEFAULT FALSE

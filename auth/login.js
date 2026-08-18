@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const pool = require("../db/db");
 const { generateOtp, sendOtpEmail } = require("./otp");
+const { authLimiter, otpVerifyLimiter } = require("../middleware/rateLimiter");
 const {
     getClientIp,
     getRefreshTokenExpiry,
@@ -13,9 +14,10 @@ const {
 } = require("../utils/authHelpers");
 const { createSession } = require("../utils/sessionService");
 
-router.post("/login", async (req, res) => {
+router.post("/login", authLimiter, async (req, res) => {
     try {
         const { email, password, role } = req.body;
+        const normalizedEmail = String(email || "").trim().toLowerCase();
 
         // Note: Currently only supporting "student" role logic.
         const userCheck = await pool.query(
@@ -23,7 +25,7 @@ router.post("/login", async (req, res) => {
              FROM students s
              LEFT JOIN room r ON r.id = s.physical_room_id
              WHERE s.email = $1`,
-            [email]
+            [normalizedEmail]
         );
         if (userCheck.rows.length === 0) {
             return res.status(401).json({ success: false, message: "Invalid email or password" });
@@ -39,14 +41,15 @@ router.post("/login", async (req, res) => {
 
         // Generate and send OTP
         const otp = generateOtp();
-        await sendOtpEmail(email, otp);
+        await sendOtpEmail(normalizedEmail, otp);
 
         const expiresAt = new Date(Date.now() + 5 * 60000);
         const otpId = crypto.randomUUID();
+        const hashedOtp = crypto.createHash("sha256").update(String(otp).trim()).digest("hex");
         
         await pool.query(
             "INSERT INTO otp_verification (id, person_id, otp, expires_at) VALUES ($1, $2, $3, $4)",
-            [otpId, email, otp, expiresAt]
+            [otpId, normalizedEmail, hashedOtp, expiresAt]
         );
 
         return res.status(200).json({ success: true, message: "OTP generated" });
@@ -56,13 +59,15 @@ router.post("/login", async (req, res) => {
     }
 });
 
-router.post("/verify-login-otp", async (req, res) => {
+router.post("/verify-login-otp", otpVerifyLimiter, async (req, res) => {
     try {
         const { email, otp, role } = req.body;
+        const normalizedEmail = String(email || "").trim().toLowerCase();
+        const hashedOtp = crypto.createHash("sha256").update(String(otp).trim()).digest("hex");
 
         const otpCheck = await pool.query(
             "SELECT id, expires_at FROM otp_verification WHERE person_id = $1 AND otp = $2 ORDER BY created_at DESC LIMIT 1",
-            [email, otp]
+            [normalizedEmail, hashedOtp]
         );
 
         if (otpCheck.rows.length === 0) {
@@ -117,13 +122,18 @@ router.post("/verify-login-otp", async (req, res) => {
         user.physical_room_id = user.room_number || user.physical_room_id;
         delete user.room_number;
 
-        // Cleanup OTPs
-        await pool.query("DELETE FROM otp_verification WHERE person_id = $1", [email]);
+        // Cleanup OTP record
+        await pool.query("DELETE FROM otp_verification WHERE id = $1", [otpRecord.id]);
 
-        // Optional cookie setting
-        res.cookie("token", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
-        res.cookie("accessToken", accessToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
-        res.cookie("refreshToken", refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+        // Secure cookies with SameSite
+        const cookieOpts = {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax"
+        };
+        res.cookie("token", accessToken, cookieOpts);
+        res.cookie("accessToken", accessToken, cookieOpts);
+        res.cookie("refreshToken", refreshToken, cookieOpts);
 
         return res.status(200).json({
             success: true,
