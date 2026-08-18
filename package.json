@@ -5,6 +5,7 @@
   "license": "ISC",
   "main": "index.js",
   "scripts": {
+    "start": "node index.js",
     "dev": "nodemon index.js",
     "db:migrate": "node db/migrate-hostel-schema.js",
     "test:hostel-changes": "node test-hostel-changes.js"
