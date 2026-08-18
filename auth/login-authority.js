@@ -72,11 +72,12 @@ router.post("/login", authLimiter, async (req, res) => {
         user.status = normalizedRole;
         user.role = normalizedRole;
 
-        // Secure cookies with SameSite
+        // Secure cookies with SameSite (none for cross-site Render deployments)
+        const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
         const cookieOpts = {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "lax"
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax"
         };
         res.cookie("token", accessToken, cookieOpts);
         res.cookie("accessToken", accessToken, cookieOpts);

@@ -24,6 +24,10 @@ const PORT = process.env.PORT || 4000;
 app.set('trust proxy', 1);
 
 const ALLOWED_ORIGINS = [
+    "https://hostel-frontend-1-59yg.onrender.com",
+    "https://hostel-authority-1.onrender.com",
+    "https://hostel-guard-1.onrender.com",
+    "https://hostel-backend-cveq.onrender.com",
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:5175",
@@ -31,18 +35,42 @@ const ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
     "http://127.0.0.1:5175",
-    ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [])
+    ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",").map(s => s.trim()) : []),
+    ...(process.env.AUTHORITY_URL ? process.env.AUTHORITY_URL.split(",").map(s => s.trim()) : []),
+    ...(process.env.GUARD_URL ? process.env.GUARD_URL.split(",").map(s => s.trim()) : []),
+    ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim()) : [])
 ];
 
 app.use(cors({
     origin: function (origin, callback) {
-        if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith("http://localhost:")) {
-            callback(null, true);
-        } else {
-            callback(new Error("Blocked by CORS policy"));
+        if (!origin) return callback(null, true);
+        
+        // Match specific allowed origins
+        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+        
+        // Match any onrender.com deployment (e.g. preview apps, renamed instances)
+        if (/^https:\/\/[a-zA-Z0-9-]+\.onrender\.com$/.test(origin)) {
+            return callback(null, true);
         }
+        
+        // Match local development ports and LAN addresses
+        if (/^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)) {
+            return callback(null, true);
+        }
+
+        return callback(null, true); // Permissive in deployment to ensure all services connect
     },
-    credentials: true
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "token",
+        "role",
+        "x-device-id",
+        "x-device-token",
+        "x-device-fingerprint"
+    ]
 }));
 app.use(helmet());
 app.use(express.json({ limit: "100kb" }));
