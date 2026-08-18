@@ -193,6 +193,16 @@ router.delete("/attendants/:id", authenticateAdmin, async (req, res) => {
 // 3. GUARD DEVICES MANAGEMENT
 // ==========================================
 
+// Helper function to generate clean 6-character activation code
+function generateActivationCode() {
+    const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // Avoid ambiguous chars 0/O, 1/I
+    let code = "GD-";
+    for (let i = 0; i < 6; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+}
+
 // GET all guard devices
 router.get("/devices", authenticateAdmin, async (req, res) => {
     try {
@@ -200,7 +210,26 @@ router.get("/devices", authenticateAdmin, async (req, res) => {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
         
-        const result = await pool.query("SELECT * FROM guard_devices ORDER BY created_at DESC");
+        const result = await pool.query(`
+            SELECT 
+                d.id,
+                d.device_name,
+                d.phone,
+                d.gate,
+                d.activation_code,
+                d.fingerprint_hash,
+                d.device_info,
+                d.status,
+                d.approved_at,
+                d.last_active_at,
+                d.last_ip,
+                d.created_at,
+                d.updated_at,
+                a.name AS approved_by_name
+            FROM guard_devices d
+            LEFT JOIN authority a ON d.approved_by = a.id
+            ORDER BY d.created_at DESC
+        `);
         res.json({ success: true, devices: result.rows });
     } catch (error) {
         console.error(error);
@@ -215,24 +244,137 @@ router.post("/devices", authenticateAdmin, async (req, res) => {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
-        const { phone } = req.body;
+        const { phone, device_name, gate } = req.body;
         if (!phone) {
-            return res.status(400).json({ success: false, message: "Phone is required" });
+            return res.status(400).json({ success: false, message: "Phone number is required" });
         }
 
         const id = crypto.randomUUID();
+        const activationCode = generateActivationCode();
+        const deviceName = device_name || "Main Gate Terminal";
+        const gateLocation = gate || "Main Gate";
 
         await pool.query(
-            "INSERT INTO guard_devices (id, phone, status) VALUES ($1, $2, 'offline')",
-            [id, phone]
+            `INSERT INTO guard_devices 
+             (id, phone, device_name, gate, activation_code, status, approved_by, approved_at) 
+             VALUES ($1, $2, $3, $4, $5, 'PENDING_ACTIVATION', $6, CURRENT_TIMESTAMP)`,
+            [id, phone.trim(), deviceName.trim(), gateLocation.trim(), activationCode, req.user.id]
         );
 
-        res.json({ success: true, message: "Guard device added successfully" });
+        // Add log
+        await pool.query(
+            "INSERT INTO guard_device_logs (id, device_id, event_type, details) VALUES ($1, $2, 'DEVICE_REGISTERED', $3)",
+            [crypto.randomUUID(), id, `Registered by Chief Warden ${req.user.name || req.user.id}`]
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Guard device registered successfully", 
+            activation_code: activationCode,
+            device_id: id 
+        });
     } catch (error) {
         console.error(error);
         if (error.code === '23505') {
-            return res.status(400).json({ success: false, message: "Phone number already registered" });
+            return res.status(400).json({ success: false, message: "Phone number is already registered" });
         }
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// POST reset device binding (for replacement phone/browser)
+router.post("/devices/:id/reset", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const newActivationCode = generateActivationCode();
+
+        const result = await pool.query(
+            `UPDATE guard_devices 
+             SET fingerprint_hash = NULL,
+                 device_info = NULL,
+                 device_token = NULL,
+                 activation_code = $1,
+                 status = 'PENDING_ACTIVATION',
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2
+             RETURNING *`,
+            [newActivationCode, req.params.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Device not found" });
+        }
+
+        await pool.query(
+            "INSERT INTO guard_device_logs (id, device_id, event_type, details) VALUES ($1, $2, 'DEVICE_RESET', $3)",
+            [crypto.randomUUID(), req.params.id, `Device binding reset by Chief Warden ${req.user.name || req.user.id}. New code generated.`]
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Device binding reset! Provide the new activation code to the guard.", 
+            activation_code: newActivationCode 
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// PATCH toggle device status (ACTIVE <-> REVOKED)
+router.patch("/devices/:id/status", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const { status } = req.body;
+        if (!status || !["ACTIVE", "REVOKED", "BLOCKED", "PENDING_ACTIVATION"].includes(status)) {
+            return res.status(400).json({ success: false, message: "Invalid status" });
+        }
+
+        const result = await pool.query(
+            `UPDATE guard_devices 
+             SET status = $1, updated_at = CURRENT_TIMESTAMP 
+             WHERE id = $2 
+             RETURNING *`,
+            [status, req.params.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Device not found" });
+        }
+
+        await pool.query(
+            "INSERT INTO guard_device_logs (id, device_id, event_type, details) VALUES ($1, $2, 'STATUS_CHANGED', $3)",
+            [crypto.randomUUID(), req.params.id, `Status changed to ${status} by Chief Warden`]
+        );
+
+        res.json({ success: true, message: `Device status updated to ${status}`, device: result.rows[0] });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// GET device logs
+router.get("/devices/:id/logs", authenticateAdmin, async (req, res) => {
+    try {
+        if (req.user.role !== "chief-warden") {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const result = await pool.query(
+            "SELECT * FROM guard_device_logs WHERE device_id = $1 ORDER BY created_at DESC LIMIT 50",
+            [req.params.id]
+        );
+
+        res.json({ success: true, logs: result.rows });
+    } catch (error) {
+        console.error(error);
         res.status(500).json({ success: false, message: "Server Error" });
     }
 });

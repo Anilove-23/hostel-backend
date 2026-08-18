@@ -4,6 +4,14 @@ const pool = require("../db/db");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/apiError");
 const ApiResponse = require("../utils/apiResponse");
+const deviceAuthRoutes = require("./deviceAuth");
+const { verifyGuardDevice } = require("../middleware/guardDeviceAuth");
+
+// Mount device activation and verification endpoints (public to allow device pairing)
+router.use("/device", deviceAuthRoutes);
+
+// Protect all subsequent guard endpoints with device hardware verification
+router.use(verifyGuardDevice);
 
 /*
 =================================================

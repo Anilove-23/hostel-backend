@@ -5,7 +5,7 @@ async function test() {
   const email = 'chiefwarden@nith.ac.in';
   const password = '1234';
   
-  const userCheck = await pool.query('SELECT * FROM authority WHERE email = ', [email]);
+  const userCheck = await pool.query('SELECT * FROM authority WHERE email = $1', [email]);
   if (userCheck.rows.length === 0) {
     console.log('User not found!');
     process.exit(1);
