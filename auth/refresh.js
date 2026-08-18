@@ -8,44 +8,22 @@ const {
     generateRefreshToken,
     generateAccessToken,
 } = require('../utils/authHelpers');
+const { authLimiter } = require('../middleware/rateLimiter');
 const { findSessionById, updateSessionRefresh } = require('../utils/sessionService');
 
-router.post('/refresh', async (req, res) => {
+router.post('/refresh', authLimiter, async (req, res) => {
     try {
         const refreshToken = req.body.refreshToken || req.cookies?.refreshToken;
         const sessionId = req.body.sessionId || req.headers['x-session-id'] || req.headers.sessionid;
 
-        if (!refreshToken) {
+        if (!refreshToken || !sessionId) {
             return res.status(400).json({
                 success: false,
-                message: 'Refresh token is required',
+                message: 'Refresh token and sessionId are required',
             });
         }
 
-        let session = null;
-
-        if (sessionId) {
-            session = await findSessionById(sessionId);
-        } else {
-            // Find recent active sessions that might match this refresh token
-            const result = await pool.query(
-                `SELECT * FROM user_session
-                 WHERE is_active = TRUE
-                   AND refresh_expires_at > CURRENT_TIMESTAMP
-                 ORDER BY login_time DESC
-                 LIMIT 50;`
-            );
-
-            for (const row of result.rows) {
-                if (row.refresh_token_hash) {
-                    const match = await compareRefreshTokens(refreshToken, row.refresh_token_hash);
-                    if (match) {
-                        session = row;
-                        break;
-                    }
-                }
-            }
-        }
+        const session = await findSessionById(sessionId);
 
         if (!session || !session.is_active) {
             return res.status(401).json({
@@ -108,10 +86,15 @@ router.post('/refresh', async (req, res) => {
         // Generate new Access Token
         const newAccessToken = generateAccessToken(userPayload);
 
-        // Set cookies
-        res.cookie('token', newAccessToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
-        res.cookie('accessToken', newAccessToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
-        res.cookie('refreshToken', newRefreshToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+        // Set secure cookies with SameSite
+        const cookieOpts = {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        };
+        res.cookie('token', newAccessToken, cookieOpts);
+        res.cookie('accessToken', newAccessToken, cookieOpts);
+        res.cookie('refreshToken', newRefreshToken, cookieOpts);
 
         return res.status(200).json({
             success: true,

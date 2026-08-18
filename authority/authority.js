@@ -196,9 +196,10 @@ router.delete("/attendants/:id", authenticateAdmin, async (req, res) => {
 // Helper function to generate clean 6-character activation code
 function generateActivationCode() {
     const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // Avoid ambiguous chars 0/O, 1/I
+    const bytes = crypto.randomBytes(6);
     let code = "GD-";
     for (let i = 0; i < 6; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
+        code += chars.charAt(bytes[i] % chars.length);
     }
     return code;
 }
@@ -216,6 +217,8 @@ router.get("/devices", authenticateAdmin, async (req, res) => {
                 d.device_name,
                 d.phone,
                 d.gate,
+                d.guard_type,
+                d.hostel_id,
                 d.activation_code,
                 d.fingerprint_hash,
                 d.device_info,
@@ -225,9 +228,11 @@ router.get("/devices", authenticateAdmin, async (req, res) => {
                 d.last_ip,
                 d.created_at,
                 d.updated_at,
-                a.name AS approved_by_name
+                a.name AS approved_by_name,
+                h.name AS hostel_name
             FROM guard_devices d
             LEFT JOIN authority a ON d.approved_by = a.id
+            LEFT JOIN hostel h ON d.hostel_id = h.id
             ORDER BY d.created_at DESC
         `);
         res.json({ success: true, devices: result.rows });
@@ -244,7 +249,7 @@ router.post("/devices", authenticateAdmin, async (req, res) => {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
-        const { phone, device_name, gate } = req.body;
+        const { phone, device_name, gate, guard_type, hostel_id } = req.body;
         if (!phone) {
             return res.status(400).json({ success: false, message: "Phone number is required" });
         }
@@ -252,13 +257,15 @@ router.post("/devices", authenticateAdmin, async (req, res) => {
         const id = crypto.randomUUID();
         const activationCode = generateActivationCode();
         const deviceName = device_name || "Main Gate Terminal";
-        const gateLocation = gate || "Main Gate";
+        const guardType = guard_type === "HOSTEL_GATE" ? "HOSTEL_GATE" : "MAIN_GATE";
+        const gateLocation = gate || (guardType === "HOSTEL_GATE" ? "Hostel Gate" : "Main Gate");
+        const assignedHostelId = guardType === "HOSTEL_GATE" ? (hostel_id || null) : null;
 
         await pool.query(
             `INSERT INTO guard_devices 
-             (id, phone, device_name, gate, activation_code, status, approved_by, approved_at) 
-             VALUES ($1, $2, $3, $4, $5, 'PENDING_ACTIVATION', $6, CURRENT_TIMESTAMP)`,
-            [id, phone.trim(), deviceName.trim(), gateLocation.trim(), activationCode, req.user.id]
+             (id, phone, device_name, gate, guard_type, hostel_id, activation_code, status, approved_by, approved_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING_ACTIVATION', $8, CURRENT_TIMESTAMP)`,
+            [id, phone.trim(), deviceName.trim(), gateLocation.trim(), guardType, assignedHostelId, activationCode, req.user.id]
         );
 
         // Add log

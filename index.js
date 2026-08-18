@@ -15,20 +15,38 @@ const students = require("./authority/students.js");
 const chiefWarden = require("./authority/chiefWarden.js");
 const outpass = require("./outpass/outpass.js");
 const guard = require("./guard/guard.js");
+const hostelGuard = require("./guard/hostelGuard.js");
 const pool = require("./db/db");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+app.set('trust proxy', 1);
+
+const ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:5175",
+    ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [])
+];
+
 app.use(cors({
     origin: function (origin, callback) {
-        callback(null, true);
+        if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith("http://localhost:")) {
+            callback(null, true);
+        } else {
+            callback(new Error("Blocked by CORS policy"));
+        }
     },
     credentials: true
 }));
 app.use(helmet());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 app.use(cookieParser());
 
 // Authentication routes
@@ -56,8 +74,11 @@ app.use("/api/outpass", dashboard); // Alias to support single-path frontends
 // Student and warden student management routes
 app.use("/api/students", students);
 
-// Guard routes
+// Guard routes (main gate)
 app.use("/api/guard", guard);
+
+// Hostel guard routes
+app.use("/api/guard", hostelGuard);
 
 // Hostels & helper routes
 app.get("/api/hostels", async (req, res) => {

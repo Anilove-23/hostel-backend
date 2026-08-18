@@ -51,23 +51,27 @@ router.post(
                     s.hostel_id,
                     s.hostel,
                     s.name,
+                    COALESCE(s.hostel_id, h.id) AS final_hostel_id,
+                    COALESCE(h.name, s.hostel) AS final_hostel_name,
                     h.local_outpass_cutoff
                 FROM students s
-                JOIN hostel h
-                    ON s.hostel_id = h.id
+                LEFT JOIN hostel h
+                    ON s.hostel_id = h.id OR LOWER(TRIM(s.hostel)) = LOWER(TRIM(h.name))
                 WHERE s.id = $1;
             `;
 
             const studentResult = await client.query(studentQuery, [studentId]);
 
             if (studentResult.rows.length === 0) {
-                throw new ApiError(404, "Student or assigned hostel not found");
+                throw new ApiError(401, "Student profile not found. Please log in again.");
             }
 
             const student = studentResult.rows[0];
+            student.hostel_id = student.final_hostel_id;
+            student.hostel = student.final_hostel_name;
 
             if (!student.hostel_id) {
-                throw new ApiError(400, "Student is not assigned to any hostel");
+                throw new ApiError(400, "Student is not assigned to any valid hostel. Please contact your hostel warden.");
             }
 
             // =================================================
@@ -140,6 +144,31 @@ router.post(
             if (!isLocalOutpass && hasLongTrip) {
                 throw new ApiError(400, "You already have an active Home/Outstation outpass.");
             }
+
+            // =================================================
+            // DETERMINE HOSTEL STATUS (for skip logic)
+            // =================================================
+            // Fetch student year and current hostel status
+            const studentYearRes = await client.query(
+                `SELECT s.current_year,
+                        COALESCE(
+                            (SELECT o.hostel_std_status FROM outpass o
+                             WHERE o.student_id = s.id
+                               AND o.is_active = true
+                               AND o.hostel_std_status = 'Out'
+                             ORDER BY o.created_at DESC LIMIT 1),
+                            'In'
+                        ) AS current_hostel_status
+                 FROM students s WHERE s.id = $1;`,
+                [studentId]
+            );
+            const studentYear = studentYearRes.rows[0]?.current_year ?? 2; // default to non-first-year
+            const currentHostelStatus = studentYearRes.rows[0]?.current_hostel_status ?? "In";
+            const isFirstYear = studentYear === 1;
+
+            // Non-first-year students who are already outside hostel: auto-skip hostel exit
+            // The new outpass starts with hostel_std_status = 'Out' + auto hostel_visit_log entry
+            const autoExitHostel = !isFirstYear && currentHostelStatus === "Out";
 
             // =================================================
             // VALIDATE DATE / TIME
@@ -225,13 +254,14 @@ router.post(
                     parent_contact,
                     outp_status,
                     std_status,
+                    hostel_std_status,
                     is_active,
                     is_emergency
                 )
                 VALUES (
                     $1, $2, $3, $4,
                     $5, $6, $7, $8,
-                    'Pending', 'In', true, $9
+                    'Pending', 'In', $9, true, $10
                 )
                 RETURNING *, outp_status as status;
             `;
@@ -245,10 +275,22 @@ router.post(
                 departure_datetime || null,
                 arrival_datetime || null,
                 parent_contact,
+                autoExitHostel ? "Out" : "In",   // hostel_std_status
                 is_emergency
             ];
 
             const insertResult = await client.query(insertQuery, insertValues);
+
+            // If student was already outside hostel (non-1st-year auto-bypass),
+            // create a hostel_visit_log row marking the exit as auto-generated.
+            if (autoExitHostel) {
+                await client.query(
+                    `INSERT INTO hostel_visit_log
+                        (outpass_id, student_id, hostel_id, hostel_exit_time, auto_exit, remark)
+                     VALUES ($1, $2, $3, CURRENT_TIMESTAMP, true, 'Auto: student was outside hostel when outpass was created');`,
+                    [outpassId, studentId, student.hostel_id]
+                );
+            }
 
             await client.query("COMMIT");
 
@@ -262,9 +304,13 @@ router.post(
                         assigned_hostel: {
                             hostel_id: student.hostel_id,
                             hostel_name: student.hostel
-                        }
+                        },
+                        auto_exit_hostel: autoExitHostel,
+                        is_first_year: isFirstYear
                     },
-                    `Outpass request sent to ${student.hostel} successfully`
+                    autoExitHostel
+                        ? `Outpass created. Hostel exit auto-recorded (you were already outside hostel).`
+                        : `Outpass request sent to ${student.hostel} successfully`
                 )
             );
         } catch (error) {

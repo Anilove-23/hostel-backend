@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const router = express.Router();
 const pool = require("../db/db");
 const auth = require("../middleware/middleware");
+const authorizeRoles = require("../middleware/authorizeRoles");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/apiError");
 const ApiResponse = require("../utils/apiResponse");
@@ -82,6 +83,7 @@ GET /api/outpasses/pending
 router.get(
     "/pending",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const page = Math.max(1, parseInt(req.query.page, 10) || 1);
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
@@ -168,6 +170,7 @@ GET /api/outpasses/monitor
 router.get(
     "/monitor",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const { updated_since } = req.query;
         const hostelInfo = await resolveHostel(pool, req.user).catch(() => null);
@@ -282,6 +285,7 @@ GET /api/outpasses/late-returns
 router.get(
     "/late-returns",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const hostelInfo = await resolveHostel(pool, req.user).catch(() => null);
 
@@ -336,6 +340,7 @@ PATCH /api/outpasses/approve/:id
 router.patch(
     "/approve/:id",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const outpassId = req.params.id;
         const { remark } = req.body;
@@ -420,6 +425,7 @@ PATCH /api/outpasses/reject/:id
 router.patch(
     "/reject/:id",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const outpassId = req.params.id;
         const { remark } = req.body;
@@ -505,12 +511,17 @@ PATCH /api/outpasses/bulk-action
 router.patch(
     "/bulk-action",
     auth,
+    authorizeRoles("warden", "chief-warden", "attendent", "guard"),
     asyncHandler(async (req, res) => {
         const { ids, outpass_ids, action, remark } = req.body;
         const targetIds = ids || outpass_ids;
 
         if (!Array.isArray(targetIds) || targetIds.length === 0) {
             throw new ApiError(400, "ids array is required");
+        }
+
+        if (targetIds.length > 100) {
+            throw new ApiError(400, "Maximum 100 outpasses allowed per bulk operation");
         }
 
         if (action !== "approve" && action !== "reject") {
@@ -620,6 +631,18 @@ router.get(
     auth,
     asyncHandler(async (req, res) => {
         const outpassId = req.params.id;
+        const userRole = (req.user?.role || req.user?.status || "").toLowerCase().replace(/[_-]/g, "");
+
+        // If requester is a student, verify they own the outpass
+        if (userRole === "student") {
+            const outpassCheck = await pool.query(
+                "SELECT id, student_id FROM outpass WHERE id = $1 LIMIT 1",
+                [outpassId]
+            );
+            if (outpassCheck.rows.length === 0 || outpassCheck.rows[0].student_id !== req.user.id) {
+                throw new ApiError(403, "Access denied: You can only view remarks for your own outpass");
+            }
+        }
 
         const result = await pool.query(
             `SELECT r.id, r.outpass_id, r.remark, r.created_at,
