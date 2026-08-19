@@ -10,6 +10,16 @@ The central REST API and database orchestration engine powering the **NIT Hamirp
 
 ---
 
+### 🌐 Related Repositories in the NITH Ecosystem
+
+| Repository | Description | Live GitHub Link |
+| :--- | :--- | :--- |
+| **`hostel-frontend`** | Student Web Application (Registration, Outpass Forms & Dynamic QR Gate Pass) | [🔗 github.com/workonlly/hostel-frontend](https://github.com/workonlly/hostel-frontend) |
+| **`hostel-authority`** | Authority & Administration Portal (Chief Warden, Warden & Attendant Dashboards) | [🔗 github.com/workonlly/hostel-authority](https://github.com/workonlly/hostel-authority) |
+| **`hostel-guard`** | Offline-First Security Terminal & Gate Scanner (Dexie.js IndexedDB & Fingerprinting) | [🔗 github.com/workonlly/hostel-guard](https://github.com/workonlly/hostel-guard) |
+
+---
+
 ## 📑 Table of Contents
 
 - [Architecture Overview](#-architecture-overview)
